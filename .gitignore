@@ -1,0 +1,22 @@
+# Environment / secrets
+.env
+
+# CCIP persistent metadata store (runtime state, not source)
+ccip_metadata.json
+*.ccip_metadata.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Test / tooling caches
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/

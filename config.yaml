@@ -1,0 +1,50 @@
+# CCIP LangGraph Anomaly Detection Workflow — configuration
+# (spec: ccip-langgraph-anomaly, Requirement 1)
+#
+# Structural thresholds, RobustSTL/STL parameters, and workflow settings live
+# here. Sensitive and environment-specific values use ${VAR_NAME} placeholders
+# that are injected from the process environment (loaded from `.env` via
+# python-dotenv) at load time. ${VAR:-default} supplies a fallback when VAR is
+# absent. Required placeholders that resolve empty abort the run with a
+# ConfigError naming the variable (Req 1.3).
+#
+# Secrets (llm_api_key, smtp_password) are stored on a repr-redacted field and
+# never appear in logs or node output (Req 1.5). Do NOT hard-code secrets here.
+
+# --- Account-level anomaly detection thresholds (Req 6) ---
+detection:
+  # Cold Start (<30 days): flag when |today - prev non-anomaly day| exceeds this.
+  cold_start_absolute_threshold: ${CCIP_COLD_START_ABS_THRESHOLD:-20.0}
+  # Statistical method for Initial/Beginner/Normal modes: "iqr" or "sigma".
+  statistical_method: ${CCIP_STAT_METHOD:-iqr}
+  iqr_factor: ${CCIP_IQR_FACTOR:-1.5}      # residual > Q3 + factor*IQR
+  sigma_factor: ${CCIP_SIGMA_FACTOR:-3.0}  # residual > mean + factor*std
+
+# --- RobustSTL / statsmodels STL parameters (Req 5.4) ---
+stl:
+  period: ${CCIP_STL_PERIOD:-7}      # weekly seasonality for daily cost data
+  seasonal: ${CCIP_STL_SEASONAL:-7}  # seasonal smoother length (odd, >= 7)
+  robust: ${CCIP_STL_ROBUST:-true}
+
+# --- Ingestion (Req 3.1) ---
+ingestion:
+  # Single-fetch window (days) ending at the Target_Date. 90 covers Normal mode.
+  history_days: ${CCIP_HISTORY_DAYS:-90}
+
+# --- LLM narrative (Gemini via LangChain) (Req 9.4) ---
+llm:
+  model: ${CCIP_LLM_MODEL:-gemini-2.5-flash-lite}
+  api_key: ${CCIP_LLM_API_KEY}   # REQUIRED secret (injected from .env)
+
+# --- Email alert (SMTP) (Req 9.5) ---
+email:
+  from: ${CCIP_EMAIL_FROM:-ccip-alerts@localhost}
+  to: ${CCIP_EMAIL_TO:-ccip-alerts@localhost}
+  smtp_host: ${CCIP_SMTP_HOST:-}       # blank => dry run (log, no send)
+  smtp_port: ${CCIP_SMTP_PORT:-587}    # 587 STARTTLS, 465 implicit TLS
+  smtp_username: ${CCIP_SMTP_USERNAME:-}
+  smtp_password: ${CCIP_SMTP_PASSWORD:-}  # Gmail App Password (secret)
+
+# --- Persistent metadata store (single JSON file) (Req 5.1) ---
+storage:
+  metadata_path: ${CCIP_METADATA_PATH:-ccip_metadata.json}

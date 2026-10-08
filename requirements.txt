@@ -1,0 +1,6 @@
+# Runtime dependencies for the Cloud Billing & Telemetry Connector (PoC).
+# Mirrors pyproject.toml [project.dependencies]. See requirements-dev.txt for
+# test/development dependencies.
+fastmcp>=2.12,<3
+httpx>=0.28,<0.29
+python-dotenv>=1.0,<2

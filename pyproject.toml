@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cloud-billing-telemetry-connector"
+version = "0.1.0"
+description = "FastMCP server exposing the AWS CUR Cost_Tool for the Cloud Cost Intelligence Pipeline (PoC)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+
+# Runtime dependencies pinned to known-compatible ranges.
+dependencies = [
+    "fastmcp>=2.12,<3",
+    "httpx>=0.28,<0.29",
+    "python-dotenv>=1.0,<2",
+    # CCIP LangGraph anomaly workflow (spec: ccip-langgraph-anomaly).
+    "langgraph>=0.2,<2",              # StateGraph orchestration of the 6 phases
+    "statsmodels>=0.14,<0.15",        # STL seasonal-trend decomposition
+    "pyyaml>=6,<7",                   # config.yaml loader
+    "langchain-google-genai>=2,<3",   # Gemini LLM adapter for the alert narrative
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3,<9",
+    "pytest-asyncio>=0.24,<0.25",
+    "hypothesis>=6.112,<7",
+    "respx>=0.21,<0.22",
+]
+
+[project.scripts]
+connector = "connector.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
