@@ -1,0 +1,33 @@
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	determine_data_mode(determine_data_mode)
+	ingest_daily_data(ingest_daily_data)
+	update_metadata_and_model(update_metadata_and_model)
+	detect_account_anomaly(detect_account_anomaly)
+	drill_down_services(drill_down_services)
+	dispatch_alerts(dispatch_alerts)
+	_alert_check(_alert_check)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> determine_data_mode;
+	_alert_check -. &nbsp;END&nbsp; .-> __end__;
+	_alert_check -.-> dispatch_alerts;
+	detect_account_anomaly -. &nbsp;END&nbsp; .-> __end__;
+	detect_account_anomaly -. &nbsp;alert_check&nbsp; .-> _alert_check;
+	detect_account_anomaly -.-> drill_down_services;
+	determine_data_mode --> ingest_daily_data;
+	drill_down_services -. &nbsp;END&nbsp; .-> __end__;
+	drill_down_services -.-> dispatch_alerts;
+	ingest_daily_data --> update_metadata_and_model;
+	update_metadata_and_model --> detect_account_anomaly;
+	dispatch_alerts --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+
+```
