@@ -201,14 +201,16 @@ def test_seasonal_context_first_of_month():
 def test_route_after_detection():
     assert route_after_detection({"account_anomaly_detected": True}) == "drill_down_services"
     assert route_after_detection({"account_anomaly_detected": False}) == "alert_check"
-    assert route_after_detection({"error": {"error": "x"}}) == "END"
+    # Error now routes to the terminal failure-dispatch node, not END (Req 12.6).
+    assert route_after_detection({"error": {"error": "x"}}) == "dispatch_failure_alert"
 
 
 def test_route_alert_check():
     assert route_alert_check({"account_anomaly_detected": True}) == "dispatch_alerts"
     assert route_alert_check({"new_services_detected": ["x"]}) == "dispatch_alerts"
     assert route_alert_check({"account_anomaly_detected": False, "new_services_detected": []}) == "END"
-    assert route_alert_check({"error": {"error": "x"}}) == "END"
+    # Error now routes to the terminal failure-dispatch node, not END (Req 12.6).
+    assert route_alert_check({"error": {"error": "x"}}) == "dispatch_failure_alert"
 
 
 # --- State init (Req 2.3) -------------------------------------------------

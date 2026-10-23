@@ -79,6 +79,9 @@ class AppConfig:
     cost_api_base_url: str
     provider: str
     project: str
+    # Logging verbosity for the structured JSON logger; defaults to INFO when
+    # LOG_LEVEL is unset/blank. Not a required key — startup never aborts on it.
+    log_level: str = "INFO"
     # Excluded from repr so credential values never leak into logs/output.
     _credentials: Optional[AwsCredentials] = field(default=None, repr=False)
 
@@ -138,6 +141,9 @@ def load_config() -> AppConfig:
 
     credentials = _load_credentials()
 
+    # Optional logging level (defaults to INFO). Never a startup-abort key.
+    log_level = _clean(os.environ.get("LOG_LEVEL")) or "INFO"
+
     return AppConfig(
         aws_account_id=values["AWS_ACCOUNT_ID"],
         aws_account_name=values["AWS_ACCOUNT_NAME"],
@@ -145,6 +151,7 @@ def load_config() -> AppConfig:
         cost_api_base_url=values["COST_API_BASE_URL"],
         provider=values["PROVIDER"],
         project=values["PROJECT"],
+        log_level=log_level,
         _credentials=credentials,
     )
 

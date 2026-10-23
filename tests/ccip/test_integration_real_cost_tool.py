@@ -57,6 +57,8 @@ def _app_config() -> AppConfig:
 def _ccip_config(tmp_path, **kw) -> CcipConfig:
     base = dict(
         metadata_path=str(tmp_path / "md.json"),
+        # Increment 2: per-account store under metadata_dir; isolate to tmp_path.
+        metadata_dir=str(tmp_path),
         _secrets=CcipSecrets(llm_api_key="test-llm-key", smtp_password="test-smtp-pw"),
     )
     base.update(kw)

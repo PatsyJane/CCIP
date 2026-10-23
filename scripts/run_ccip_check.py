@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import sys
 from datetime import date, datetime, timedelta
@@ -41,6 +42,7 @@ if _SRC not in sys.path:
 
 from connector.ccip.config import ConfigError, load_ccip_config  # noqa: E402
 from connector.ccip.runner import build_fake_deps, build_live_deps, run_once  # noqa: E402
+from connector.logging_config import configure_logging, get_logger, log_event  # noqa: E402
 
 
 def _parse_date(value: str) -> date:
@@ -52,9 +54,24 @@ def _parse_date(value: str) -> date:
         ) from exc
 
 
-def _default_target_date() -> date:
-    """Default to yesterday - the latest complete day for daily cost data."""
-    return date.today() - timedelta(days=1)
+#: Fallback look-back used only if the config offset cannot be read. AWS CUR data
+#: for a given day is not reliably settled until well into the following day (late
+#: / retroactive line items), so the pipeline evaluates two days back: a run on
+#: day D checks day D-2 (e.g. a 15th-Oct run checks the 13th). This trades one
+#: extra day of latency for a materially more complete day of cost data. The
+#: authoritative offset is ``CcipConfig.target_date_offset_days`` (Req 13.4).
+DEFAULT_TARGET_DATE_OFFSET_DAYS: int = 2
+
+
+def _default_target_date(offset_days: int = DEFAULT_TARGET_DATE_OFFSET_DAYS) -> date:
+    """Default to ``offset_days`` days ago - the latest reliably-complete CUR day.
+
+    A run on day D defaults the Target_Date to D-``offset_days`` (default D-2, e.g.
+    a 15th-Oct run checks the 13th), because the most recent day's CUR data is
+    frequently still partial when a daily job runs. The offset is sourced from
+    ``CcipConfig.target_date_offset_days`` by the caller (Req 13.4).
+    """
+    return date.today() - timedelta(days=offset_days)
 
 
 def _is_structured_error(result) -> bool:
@@ -70,8 +87,19 @@ def _is_structured_error(result) -> bool:
 def _print_result(result) -> None:
     print("\n=== CCIP run result ===")
     if _is_structured_error(result):
-        print("Structured_Error returned (no alert sent):")
+        print("Structured_Error returned (anomaly alert NOT sent):")
         print(json.dumps(result, indent=2))
+        # The graph routes any error through the terminal dispatch_failure_alert
+        # node, which emails the ops recipient (CCIP_ALERT_FAILURE_TO) best-effort
+        # or dry-runs it (Req 12.6-12.9). The bare error is the run result; the
+        # failure-notification outcome is reported via the structured logs
+        # (events ``ccip.dispatch_failure_alert`` / ``...delivery_failed``).
+        attempts = result.get("attempts")
+        if attempts is not None:
+            print(f"\nfetch attempts made    : {attempts}")
+        print("failure notification   : attempted via CCIP_ALERT_FAILURE_TO "
+              "(see ccip.dispatch_failure_alert log event for delivery/dry-run)")
+        print("exit status            : non-zero (run failed)")
         return
     # Terminal state (a dict-like).
     state = result
@@ -97,12 +125,11 @@ def _print_result(result) -> None:
 
 
 async def _run(
-    account_id: str, target_date: date, live: bool, config_path: str,
+    account_id: str, target_date: date | None, live: bool, config_path: str,
     dry_run_email: bool,
 ) -> int:
     smtp_note = " | EMAIL DRY-RUN (log only)" if (live and dry_run_email) else ""
     mode = "LIVE (real AWS + Gemini + SMTP)" if live else "FAKE (no network)"
-    print(f"Running CCIP check | mode={mode}{smtp_note} | account_id={account_id} | target_date={target_date}")
 
     http = None
     try:
@@ -110,6 +137,14 @@ async def _run(
             try:
                 config = load_ccip_config(config_path)
             except ConfigError as exc:
+                # Logging may not be configured yet; install a default handler so
+                # the abort reason is still structured.
+                configure_logging()
+                log_event(
+                    get_logger("connector.ccip.cli"), "ccip.run_aborted",
+                    level=logging.ERROR,
+                    payload={"reason": "config-error", "detail": str(exc)},
+                )
                 print(f"Cannot start live run: {exc}")
                 print("Populate config.yaml / the CCIP_* keys in .env, or use --no-live.")
                 return 2
@@ -123,6 +158,31 @@ async def _run(
                 _secrets=CcipSecrets(llm_api_key="fake", smtp_password="fake"),
             )
             deps = build_fake_deps(config, cost_payload={"granularity": "DAILY", "items": []})
+
+        # Resolve the default Target_Date from the loaded config's offset (Req 13.4)
+        # when the operator did not pass one explicitly (Req 13.2 honors explicit).
+        if target_date is None:
+            target_date = _default_target_date(config.target_date_offset_days)
+        print(f"Running CCIP check | mode={mode}{smtp_note} | account_id={account_id} | target_date={target_date}")
+
+        # Install structured JSON logging and register the run's secrets so no
+        # LLM key / SMTP password can leak into a log line.
+        secrets = config.secrets
+        secret_values = (
+            [secrets.llm_api_key, secrets.smtp_password] if secrets is not None else []
+        )
+        configure_logging(config.log_level, secrets=secret_values)
+        log_event(
+            get_logger("connector.ccip.cli"), "ccip.run_started",
+            payload={
+                "account_id": account_id,
+                "account_name": config.account_name,
+                "target_date": target_date.isoformat(),
+                "live": live,
+                "email_dry_run": bool(live and dry_run_email),
+                "log_level": config.log_level,
+            },
+        )
 
         result = await run_once(account_id, target_date, deps)
     finally:
@@ -138,7 +198,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--account-id", required=True, help="Target AWS account id.")
     parser.add_argument(
         "--target-date", type=_parse_date, default=None,
-        help="Evaluation date (YYYY-MM-DD). Defaults to yesterday.",
+        help="Evaluation date (YYYY-MM-DD). Defaults to two days ago "
+             "(the latest reliably-complete CUR day).",
     )
     parser.add_argument(
         "--config", default=os.path.join(_ROOT, "config.yaml"),
@@ -154,9 +215,10 @@ def main(argv: list[str] | None = None) -> int:
              "sending it over SMTP (safe first live run).",
     )
     args = parser.parse_args(argv)
-    target_date = args.target_date or _default_target_date()
+    # Pass the explicit date through as-is; when None, _run resolves the default
+    # from the loaded config's target_date_offset_days (Req 13.2, 13.4).
     return asyncio.run(
-        _run(args.account_id, target_date, not args.no_live, args.config, args.dry_run_email)
+        _run(args.account_id, args.target_date, not args.no_live, args.config, args.dry_run_email)
     )
 
 

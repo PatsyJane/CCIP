@@ -4,13 +4,18 @@ Builds the :class:`connector.ccip.nodes.CcipDeps` container (real or fake) and
 runs the compiled graph once for a ``(account_id, target_date)``:
 
 - :func:`build_live_deps` wires the REAL ``aws_cur_cost`` (via ``load_config`` +
-  ``HttpClient`` + ``make_aws_cur_cost``), the real Gemini client, and the real
-  SMTP sender — using the loaded :class:`CcipConfig`.
-- :func:`build_fake_deps` wires in-memory fakes for an offline run (no network).
+  ``HttpClient`` + ``make_aws_cur_cost``), the real Gemini client, the real SMTP
+  sender for anomaly alerts, and a SEPARATE SMTP sender addressed to
+  ``email_failure_to`` for terminal failure alerts (Req 12.8) — using the loaded
+  :class:`CcipConfig`.
+- :func:`build_fake_deps` wires in-memory fakes for an offline run (no network),
+  including a separate fake failure sender.
 - :func:`run_once` seeds the state, short-circuits on a seed/validation error, and
-  invokes the compiled graph.
+  invokes the compiled graph. A graph-internal error still routes through the
+  terminal failure-notification node and is surfaced unchanged as the result
+  (Req 12.6).
 
-Requirements: 2.1, 9.5.
+Requirements: 2.1, 9.5, 12.8.
 """
 
 from __future__ import annotations
@@ -63,10 +68,26 @@ def build_live_deps(
         email_to=config.email_to,
         force_dry_run=force_email_dry_run,
     )
+    # A SEPARATE sender for terminal failure-notification alerts, addressed to the
+    # ops recipient ``email_failure_to`` (Req 12.8). It reuses the same SMTP
+    # settings; when the ops recipient is blank it is forced into a safe dry run so
+    # a misconfigured recipient never raises. ``force_email_dry_run`` propagates so
+    # a safe live run never sends a real failure email either.
+    failure_recipient = config.email_failure_to or config.email_to
+    failure_email_sender = SmtpEmailSender(
+        host=config.smtp_host,
+        port=config.smtp_port,
+        username=config.smtp_username or config.email_from,
+        password=secrets.smtp_password if secrets else None,
+        email_from=config.email_from,
+        email_to=failure_recipient,
+        force_dry_run=force_email_dry_run or not config.email_failure_to,
+    )
     deps = CcipDeps(
         cost_tool=cost_tool,
         llm_client=llm_client,
         email_sender=email_sender,
+        failure_email_sender=failure_email_sender,
         config=config,
     )
     return deps, http
@@ -96,10 +117,14 @@ def build_fake_deps(
         async def send(self, subject: str, body: str) -> None:
             self.sent.append((subject, body))
 
+    # A SEPARATE fake sender for failure alerts so an offline run exercises the
+    # terminal failure-notification path (Req 12.8) without crossing wires with
+    # the anomaly-alert sender.
     return CcipDeps(
         cost_tool=_fake_cost_tool,
         llm_client=_FakeLLM(),
         email_sender=_FakeEmailSender(),
+        failure_email_sender=_FakeEmailSender(),
         config=config,
     )
 

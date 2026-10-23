@@ -11,9 +11,9 @@ detection, drill-down) that need no I/O; then the I/O stages (ingestion over the
 MCP Cost_Tool, Gemini narrative, SMTP email); then the six LangGraph nodes and two
 routers; then graph assembly and the runner/CLI; and finally the real-`aws_cur_cost`
 integration path. Testing follows a dual approach — example/edge unit tests plus
-Hypothesis property-based tests (17 properties) — with the Cost_Tool, LLM, and
-Email_Sender always replaced by injected fakes so no unit/property/smoke test
-performs a network, SMTP, or external-filesystem call.
+Hypothesis property-based tests (25 properties across v1 + increment 2) — with the
+Cost_Tool, LLM, and Email_Sender always replaced by injected fakes so no
+unit/property/smoke test performs a network, SMTP, or external-filesystem call.
 
 Language: Python. New deps: `langgraph`, `statsmodels`, `pyyaml`. Reused:
 `connector.errors` (error contract), `connector.tools.aws_cur_cost` (Cost_Tool),
@@ -233,16 +233,145 @@ dotenv/repr-redaction config style, and the SMTP dry-run sender pattern.
 - [x] 17. Final checkpoint - Ensure all tests pass
   - `pytest` passes: 58 tests (56 CCIP + Connector scaffolding), 0 failures.
 
+- [x] 18. Add fetch retry (Part A) and terminal failure notification (Part B)
+  - [x] 18.1 Add config keys to `CcipConfig`, `config.yaml`, `.env.example`
+    - `CcipConfig`: `email_failure_to`, `retry_max_attempts` (3), `retry_base_delay`
+      (1.0), `retry_max_delay` (30.0), `retry_multiplier` (2.0), `retry_jitter`
+      (true); map them in `load_ccip_config`
+    - `config.yaml`: new `retry:` block + `email.failure_to` with `${VAR}`
+      placeholders; `.env.example`: `CCIP_ALERT_FAILURE_TO` + `CCIP_RETRY_*` keys
+    - _Requirements: 1.1, 1.2, 12.1, 12.3, 12.8_
+
+  - [x] 18.2 Implement `retry.py`: `RetryPolicy`, `is_retryable`, `retry_async`
+    - Bounded exponential backoff with jitter; inject `sleep` for tests; retry only
+      `unreachable-source`; on exhaustion return the last error
+    - _Requirements: 12.1, 12.2, 12.3, 12.5_
+
+  - [x] 18.3 Wire retry into `fetch_cost_payload` (Phase 1 fetch)
+    - Accept an optional `RetryPolicy`; wrap the single `cost_tool` call via
+      `retry_async`; stamp `attempts` on the exhausted error; emit a WARNING per
+      retry via the module logger
+    - _Requirements: 12.1, 12.4, 12.5_
+
+  - [x] 18.4 Implement the failure-alert builder + `dispatch_failure_alert` node
+    - `email.py`: `build_failure_payload`, `build_failure_subject`,
+      `render_failure_narrative` (no LLM, scrubbed)
+    - `nodes.py`: `dispatch_failure_alert` — runs only on `error`, delivers via the
+      failure sender best-effort (dry-run safe), records
+      `failure_alert_dispatched`/`failure_alert_dry_run`, never clears `error`,
+      never re-raises
+    - _Requirements: 12.6, 12.7, 12.8, 12.9, 12.11_
+
+  - [x] 18.5 Rewire routers + graph to route errors to failure dispatch
+    - `routers.py`: `route_on_error(ok_node)` helper; `route_after_detection` /
+      `route_alert_check` return `dispatch_failure_alert` on error; add the node and
+      conditional edges in `graph.py` (early phases become conditional edges);
+      terminal `dispatch_failure_alert -> END`
+    - _Requirements: 7.1-7.6, 12.6_
+
+  - [x] 18.6 Wire the failure sender + retry policy into the runner, update state/CLI
+    - `state.py`: add `failure_alert_dispatched` / `failure_alert_dry_run` defaults
+    - `runner.py`: add `failure_email_sender` to `CcipDeps`; build it in
+      `build_live_deps` (addressed to `email_failure_to`) and `build_fake_deps`
+      (separate fake + zero-delay retry policy); bind the `RetryPolicy`
+    - CLI: surface failure-dispatch outcome in the printout; keep non-zero exit on a
+      Structured_Error
+    - _Requirements: 12.8, 12.10_
+
+  - [x]* 18.7 Tests: retry decision/schedule, failure-dispatch routing, determinism
+    - **Property 18, 19** (retry); **Property 20, 21** (failure dispatch); a graph
+      smoke test that an `unreachable-source` fetch retries then reaches a dry-run
+      failure alert; unit tests that non-retryable categories are never retried and
+      the failure payload is LLM-free + scrubbed
+    - _Requirements: 12.1-12.11_
+
+## Increment 2 tasks — incremental ingestion + per-account metadata (single run)
+
+> Refactors the core ingestion and metadata logic of a SINGLE run so it is cheap
+> and account-safe. The scheduler/cron, bounded-concurrency orchestration, and
+> account registry are **explicitly deferred** and have NO tasks here (see the
+> Requirements scope table and the Increment 2 "Deferred" note).
+
+- [ ] 19. Incremental ingestion + per-account metadata (single-run)
+  - [ ] 19.1 Add increment-2 config keys to `CcipConfig`, `config.yaml`, `.env.example`
+    - `CcipConfig`: `target_date_offset_days` (2), `history_days` (90),
+      `trailing_fetch_days` (2), `reconciliation_interval_days` (7), `metadata_dir`
+      (`metadata`); map them in `load_ccip_config`
+    - `config.yaml`: add the ingestion/storage keys with `${VAR}` placeholders;
+      `.env.example`: add any corresponding `CCIP_*` keys
+    - _Requirements: 1.1, 1.2, 1.4, 13.4, 14.1, 15.2, 16.1, 16.4_
+
+  - [x] 19.2 Default the CLI Target_Date to D-2
+    - `scripts/run_ccip_check.py`: default an omitted `--target-date` to
+      `today - 2` (named constant); an explicit value overrides; update the help
+      text and docstrings — ALREADY APPLIED in code ahead of this spec write-up.
+      (Follow-up in 19.6: source the offset from `config.target_date_offset_days`
+      rather than a hardcoded 2.)
+    - _Requirements: 13.1, 13.2, 13.3_
+
+  - [ ] 19.3 Per-account path resolver + filename sanitizer in `metadata_store.py`
+    - `sanitize_path_segment(value)`: replace any char outside `[A-Za-z0-9._-]`
+      with `_`, collapse repeats, trim leading/trailing `._-`; traversal-safe on
+      Windows + Linux
+    - `account_metadata_path(config, account_id, account_name)` ->
+      `<metadata_dir>/ccip_metadata_<san_name>_<san_id>.json`, falling back to
+      `ccip_metadata_<san_id>.json` when the name is blank; id segment always
+      present
+    - `save_metadata` creates the base dir if absent; keep the atomic temp+replace
+    - _Requirements: 14.1, 14.2, 14.3, 14.5_
+
+  - [ ] 19.4 Persist the Rolling_History_Window in the store
+    - Expand `DEFAULT_METADATA` with `history_series`, `service_history`,
+      `last_full_fetch_date`; `load_metadata` merges over defaults so a
+      pre-increment-2 file still exposes the keys
+    - Implement `merge_history` / `merge_service_history`: day-keyed OVERWRITE
+      (idempotent, never sum), ascending, trimmed to `history_days`
+    - _Requirements: 15.1, 15.2, 15.3, 15.6_
+
+  - [ ] 19.5 Fetch-window selection + merge in `ingest.py` / Phase 1-3
+    - Implement `decide_fetch_window(metadata, target_date, config)` returning
+      `(start, end, mode, reason)`: FULL on cold-start (`< history_days`), gap
+      (latest day `< target_date - 1`), or reconciliation (interval elapsed);
+      TRAILING (`trailing_fetch_days`) otherwise; end always the Target_Date
+    - Phase 1 fetches the chosen span (trailing or full) and logs `(mode, reason)`;
+      a FULL pull stamps `last_full_fetch_date`; a reconciliation pull REPLACES the
+      persisted history, others MERGE
+    - Derive `available_days` and run STL from the MERGED persisted history, not
+      only the current fetch; STL still runs every eligible run
+    - _Requirements: 15.4, 15.5, 16.1, 16.2, 16.3, 16.4, 16.5, 16.6, 16.7_
+
+  - [ ] 19.6 Wire the per-account path + offset through the nodes and runner
+    - Replace the single `metadata_path` reads in `update_metadata_and_model`,
+      `detect_account_anomaly`, and `dispatch_alerts` with
+      `account_metadata_path(config, state["account_id"], config.account_name)`
+    - Source the CLI's D-2 offset from `config.target_date_offset_days` (completing
+      19.2); keep an explicit `--target-date` overriding
+    - _Requirements: 13.4, 14.4, 14.6_
+
+  - [ ]* 19.7 Tests for the increment-2 pure logic
+    - **Property 22** (D-2 default resolution), **Property 23** (per-account path
+      isolation + traversal safety), **Property 24** (idempotent/overwriting/
+      trimmed history merge), **Property 25** (fetch-window selection); unit tests
+      for the blank-name filename fallback and the pre-increment-2 store upgrade
+      path. All pure; any store round-trip uses `tmp_path`, no network/SMTP
+    - _Requirements: 13.1-13.3, 14.1-14.4, 15.2-15.3, 16.1-16.4_
+
+  - Deferred (no tasks this increment): the scheduler/cron, bounded-concurrency
+    orchestration across accounts, and the account registry.
+
 ## Notes
 
 - Tasks marked `*` are optional test sub-tasks and can be skipped for a faster
   MVP; core implementation tasks are never optional.
-- Each of the 17 correctness properties is a single Hypothesis property-based test
+- Each of the 25 correctness properties is a single Hypothesis property-based test
   (≥100 iterations), tagged `# Feature: ccip-langgraph-anomaly, Property {n}: {text}`,
-  with the Cost_Tool, LLM, and Email_Sender always faked.
+  with the Cost_Tool, LLM, and Email_Sender always faked. (Properties 1–21 are v1 +
+  retry/failure; 22–25 are increment 2.)
 - The FastMCP Connector and `connector.errors` are preserved and reused, not modified.
-- Deferred (no tasks this iteration): GCP/Azure, automated remediation, multi-account
-  batch scheduling, and database-backed metadata.
+- Deferred (no tasks any iteration): GCP/Azure, automated remediation, and
+  database-backed metadata. Deferred specifically out of increment 2: the
+  scheduler/cron, bounded-concurrency orchestration, and the account registry
+  (multi-account batch scheduling).
 
 ## Task Dependency Graph
 
@@ -258,7 +387,20 @@ dotenv/repr-redaction config style, and the SMTP dry-run sender pattern.
     { "id": 6, "tasks": ["12.3", "12.4", "12.5"] },
     { "id": 7, "tasks": ["13.1", "13.2", "13.3"] },
     { "id": 8, "tasks": ["15.1"] },
-    { "id": 9, "tasks": ["16.1", "16.2", "16.3"] }
+    { "id": 9, "tasks": ["16.1", "16.2", "16.3"] },
+    { "id": 10, "tasks": ["18.1", "18.2"] },
+    { "id": 11, "tasks": ["18.3", "18.4", "18.5"] },
+    { "id": 12, "tasks": ["18.6", "18.7"] },
+    { "id": 13, "tasks": ["19.1", "19.2"] },
+    { "id": 14, "tasks": ["19.3", "19.4"] },
+    { "id": 15, "tasks": ["19.5", "19.6"] },
+    { "id": 16, "tasks": ["19.7"] }
   ]
 }
 ```
+
+Increment-2 wave rationale: config keys (19.1) and the CLI D-2 default (19.2) are
+independent and land first; the store primitives — path resolver (19.3) and
+persisted history + merge helpers (19.4) — build on the config; the ingestion
+fetch-window selection + merge (19.5) and the node/runner wiring (19.6) depend on
+both store primitives; the property/unit tests (19.7) come last.

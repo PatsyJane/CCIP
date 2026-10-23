@@ -26,10 +26,20 @@ stl:
   seasonal: ${CCIP_STL_SEASONAL:-7}  # seasonal smoother length (odd, >= 7)
   robust: ${CCIP_STL_ROBUST:-true}
 
-# --- Ingestion (Req 3.1) ---
+# --- Ingestion (Req 3.1, 13, 15, 16) ---
 ingestion:
-  # Single-fetch window (days) ending at the Target_Date. 90 covers Normal mode.
+  # Rolling_History_Window length (days) + the span of a FULL pull. 90 covers
+  # Normal mode. The persisted history is trimmed to this many most-recent days.
   history_days: ${CCIP_HISTORY_DAYS:-90}
+  # Default Target_Date offset: a run with no explicit date evaluates D-N. 2 (D-2)
+  # skips the still-settling "yesterday" of AWS CUR data (Req 13).
+  target_date_offset_days: ${CCIP_TARGET_DATE_OFFSET_DAYS:-2}
+  # Steady-state trailing window merged into the persisted history (Req 16.1):
+  # 2 => the Target_Date and the day before it.
+  trailing_fetch_days: ${CCIP_TRAILING_FETCH_DAYS:-2}
+  # Cadence (days) of the periodic FULL reconciliation pull that REPLACES the
+  # persisted history to self-heal drift (Req 16.4).
+  reconciliation_interval_days: ${CCIP_RECONCILIATION_INTERVAL_DAYS:-7}
 
 # --- LLM narrative (Gemini via LangChain) (Req 9.4) ---
 llm:
@@ -40,11 +50,30 @@ llm:
 email:
   from: ${CCIP_EMAIL_FROM:-ccip-alerts@localhost}
   to: ${CCIP_EMAIL_TO:-ccip-alerts@localhost}
+  # Separate operations recipient for terminal failure-notification alerts
+  # (Req 12.8). Blank => the failure alert dry-runs (log only, no send).
+  failure_to: ${CCIP_ALERT_FAILURE_TO:-}
   smtp_host: ${CCIP_SMTP_HOST:-}       # blank => dry run (log, no send)
   smtp_port: ${CCIP_SMTP_PORT:-587}    # 587 STARTTLS, 465 implicit TLS
   smtp_username: ${CCIP_SMTP_USERNAME:-}
   smtp_password: ${CCIP_SMTP_PASSWORD:-}  # Gmail App Password (secret)
 
-# --- Persistent metadata store (single JSON file) (Req 5.1) ---
+# --- Fetch retry: transient Cost_API failures only (Req 12.1-12.3) ---
+# Bounded exponential backoff with jitter, applied ONLY to unreachable-source
+# Phase-1 fetch failures. Deterministic errors (invalid-parameter / missing-data
+# / unexpected-error) are never retried. Each attempt is still bounded by the
+# shared 30s HttpClient timeout; backoff sleeps occur only BETWEEN attempts.
+retry:
+  max_attempts: ${CCIP_RETRY_MAX_ATTEMPTS:-3}   # total attempts incl. the first
+  base_delay: ${CCIP_RETRY_BASE_DELAY:-1.0}     # seconds; first backoff
+  max_delay: ${CCIP_RETRY_MAX_DELAY:-30.0}      # seconds; backoff cap
+  multiplier: ${CCIP_RETRY_MULTIPLIER:-2.0}     # exponential growth factor
+  jitter: ${CCIP_RETRY_JITTER:-true}            # randomize each delay
+
+# --- Persistent metadata store (Req 5.1, 14) ---
+# Increment 2 partitions the store per account into
+# <metadata_dir>/ccip_metadata_<account_name>_<account_id>.json. ``metadata_path``
+# is the legacy single-file path, retained for backward compatibility.
 storage:
   metadata_path: ${CCIP_METADATA_PATH:-ccip_metadata.json}
+  metadata_dir: ${CCIP_METADATA_DIR:-metadata}

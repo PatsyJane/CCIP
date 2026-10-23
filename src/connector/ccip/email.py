@@ -29,6 +29,9 @@ __all__ = [
     "EmailSender",
     "build_alert_payload",
     "build_subject",
+    "build_failure_payload",
+    "build_failure_subject",
+    "render_failure_narrative",
     "deliver",
     "SmtpEmailSender",
 ]
@@ -80,6 +83,64 @@ def build_subject(payload: dict[str, Any]) -> str:
     else:
         subject = f"Cloud cost report: account {account} on {date}"
     return subject[:200]
+
+
+def build_failure_payload(state: dict[str, Any], error: dict[str, Any]) -> dict[str, Any]:
+    """Assemble the DETERMINISTIC failure-alert payload (Req 12.7).
+
+    Pulls the account id / target date from the run state and the failing
+    stage/source, category, scrubbed message, and attempts made from the
+    Structured_Error. Pure; invokes no LLM. The ``error`` is expected to already
+    be secret-scrubbed (it is scrubbed when placed on ``state['error']``); the
+    node re-scrubs the rendered alert as a defense-in-depth step (Req 12.11).
+    """
+    error = error or {}
+    return {
+        "account_id": state.get("account_id"),
+        "target_date": state.get("target_date"),
+        "stage": error.get("source"),
+        "category": error.get("category"),
+        "message": error.get("error"),
+        "attempts": error.get("attempts"),
+    }
+
+
+def build_failure_subject(payload: dict[str, Any]) -> str:
+    """Build a non-empty failure-alert subject line, clamped to <= 200 characters."""
+    account = payload.get("account_id", "unknown")
+    date = payload.get("target_date", "")
+    category = payload.get("category", "unexpected-error")
+    subject = f"CCIP run FAILED: account {account} on {date} [{category}]"
+    return subject[:200]
+
+
+def render_failure_narrative(payload: dict[str, Any]) -> str:
+    """Render deterministic, template-only prose for the failure email (Req 12.7).
+
+    Never calls the LLM: a failure alert must not depend on an upstream the run
+    just failed to reach. Reports only what the Structured_Error carried.
+    """
+    lines = [
+        "A CCIP anomaly-detection run could not be completed.",
+        "",
+        f"  Account      : {payload.get('account_id')}",
+        f"  Target date  : {payload.get('target_date')}",
+        f"  Failing stage: {payload.get('stage') or 'unknown'}",
+        f"  Error category: {payload.get('category') or 'unexpected-error'}",
+    ]
+    attempts = payload.get("attempts")
+    if attempts is not None:
+        lines.append(f"  Fetch attempts made: {attempts}")
+    lines += [
+        "",
+        "Error detail:",
+        f"  {payload.get('message') or '(no message)'}",
+        "",
+        "No anomaly evaluation was produced for this run. Investigate the failing "
+        "stage above; once the underlying issue is resolved, re-run the check for "
+        "this account and date.",
+    ]
+    return "\n".join(lines)
 
 
 async def deliver(sender: EmailSender, subject: str, body: str) -> Optional[dict]:

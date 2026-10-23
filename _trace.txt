@@ -1,0 +1,147 @@
+﻿
+==============================================================================
+INPUT
+==============================================================================
+  account_id                : 647096474516
+  account_name (config)     : Pulse
+  target_date               : 2026-10-05
+  history_days              : 90
+  trailing_fetch_days       : 2
+  reconciliation_interval   : 7
+  statistical_method        : iqr
+  iqr_factor / sigma_factor : 1.5 / 3.0
+  stl period / seasonal     : 7 / 7
+  cold_start_abs_threshold  : 20.0
+
+==============================================================================
+PHASE 1 - determine_data_mode (the single MCP fetch)
+==============================================================================
+  Fetch-window decision (from persisted store + config):
+      per-account store     : metadata\ccip_metadata_Pulse_647096474516.json
+      persisted history days: 0
+      fetch mode            : full
+      fetch reason          : cold-start
+      window                : 2026-07-07 -> 2026-10-05  (span 90d)
+      replace_history       : False
+  Outputs:
+      raw items fetched     : 2464
+      available_days (merged): 91
+      data_mode             : Normal
+  Data-mode rule: <30 Cold Start | 30-59 Initial | 60-89 Beginner | >=90 Normal
+
+==============================================================================
+PHASE 2 - ingest_daily_data (pure normalize + merge history)
+==============================================================================
+  Outputs:
+      account_total_cost (target): 955.46
+      service_costs (target day): 29 services
+      merged history_series : 90 days
+        series preview      : 2026-07-08=879.37, 2026-07-09=870.97, 2026-07-10=872.72, 2026-07-11=767.72, 2026-07-12=767.99  ...  2026-10-01=942.73, 2026-10-02=831.37, 2026-10-03=844.16, 2026-10-04=791.35, 2026-10-05=955.46
+      merged service_history: 35 services
+      sum(service_costs) check: 955.46 (== account_total_cost)
+
+==============================================================================
+PHASE 3 - update_metadata_and_model (new services + STL)
+==============================================================================
+  New-service detection (window services - known, excluding UNKNOWN):
+      known before run      : 0
+      new_services_detected : 35
+        sample              : AWS Backup, AWS CloudShell, AWS CloudTrail, AWS Config, AWS Cost Explorer, AWS Direct Connect, AWS Key Management Service, AWS Lambda  (+27 more)
+  STL decomposition (fit on history EXCLUDING the target day):
+      fit points (resid)    : 89
+      last trend level      : 890.1861
+      expected_target       : 904.2969
+      actual_target         : 955.46
+      target_residual       : 51.1631  (actual - expected)
+      Q1 / Q3 / IQR         : -9.73 / 7.6738 / 17.4038
+      threshold formula     : Q3 + 1.5*IQR
+      residual_threshold    : 33.7795
+
+==============================================================================
+PHASE 4 - detect_account_anomaly
+==============================================================================
+    most-recent prior non-anomaly day: (none)
+  Detection:
+      method                : stl-residual
+      rule                  : target_residual > residual_threshold
+      comparison            : 51.1631 > 33.7795 => True
+      account_anomaly_detected: True
+      baseline_day          : None
+
+==============================================================================
+PHASE 5 - drill_down_services (only runs on an anomaly)
+==============================================================================
+  Contributors (delta = target_cost - baseline_cost, baseline_day=None):
+      contributor count     : 26
+      Amazon Elastic Compute Cloud - Compute           +333.87     (0.0 -> 333.87)
+      Amazon Relational Database Service               +280.79     (0.0 -> 280.79)
+      Savings Plans for AWS Compute usage              +86.8       (0.0 -> 86.8)
+      Amazon Simple Storage Service                    +70.7       (0.0 -> 70.7)
+      Amazon Virtual Private Cloud                     +36.25      (0.0 -> 36.25)
+      EC2 - Other                                      +29.12      (0.0 -> 29.12)
+      AmazonCloudWatch                                 +25.71      (0.0 -> 25.71)
+      Amazon Elastic Load Balancing                    +18.34      (0.0 -> 18.34)
+      Amazon Elastic Container Service for Kubernetes  +16.8       (0.0 -> 16.8)
+      Amazon API Gateway                               +14.3       (0.0 -> 14.3)
+      ... (+16 more)
+
+==============================================================================
+PHASE 6 - dispatch_alerts (narrative + delivery; DRY RUN here)
+==============================================================================
+[SmtpEmailSender] SMTP not configured - DRY RUN, no email sent.
+  From: patsyjocelin@gmail.com
+  To: patsyjocelin@gmail.com
+  Subject: Cloud cost anomaly: account 647096474516 on 2026-10-05
+  --- Body ---
+Subject: Cloud Cost Anomaly Detected - Account 647096474516 - 2026-10-05
+
+An anomaly has been detected in account 647096474516 on 2026-10-05. The total cost for the account is 955.46.
+
+The following services were newly detected: AWS Backup, AWS CloudShell, AWS CloudTrail, AWS Config, AWS Cost Explorer, AWS Direct Connect, AWS Key Management Service, AWS Lambda, AWS Secrets Manager, AWS Systems Manager, AWS X-Ray, Amazon API Gateway, Amazon Athena, Amazon CloudFront, Amazon DynamoDB, Amazon Elastic Compute Cloud - Compute, Amazon Elastic Container Service for Kubernetes, Amazon Elastic File System, Amazon Elastic Load Balancing, Amazon GuardDuty, Amazon Lightsail, Amazon Polly, Amazon QuickSight, Amazon Relational Database Service, Amazon Route 53, Amazon Simple Email Service, Amazon Simple Notification Service, Amazon Simple Queue Service, Amazon Simple Storage Service, Amazon Virtual Private Cloud, AmazonCloudWatch, EC2 - Other, Savings Plans for AWS Compute usage.
+
+The top contributors to the anomaly are:
+* Amazon Elastic Compute Cloud - Compute: +333.87
+* Amazon Relational Database Service: +280.79
+* Savings Plans for AWS Compute usage: +86.8
+* Amazon Simple Storage Service: +70.7
+* Amazon Virtual Private Cloud: +36.25
+* EC2 - Other: +29.12
+* AmazonCloudWatch: +25.71
+* Amazon Elastic Load Balancing: +18.34
+* Amazon Elastic Container Service for Kubernetes: +16.8
+* Amazon API Gateway: +14.3
+  --- End body ---
+    alert_dispatched        : True
+    alert_dry_run           : True
+    narrative_templated (LLM?): False (LLM-generated)
+    subject                 : Cloud cost anomaly: account 647096474516 on 2026-10-05
+
+  --- Narrative ---
+  Subject: Cloud Cost Anomaly Detected - Account 647096474516 - 2026-10-05
+  
+  An anomaly has been detected in account 647096474516 on 2026-10-05. The total cost for the account is 955.46.
+  
+  The following services were newly detected: AWS Backup, AWS CloudShell, AWS CloudTrail, AWS Config, AWS Cost Explorer, AWS Direct Connect, AWS Key Management Service, AWS Lambda, AWS Secrets Manager, AWS Systems Manager, AWS X-Ray, Amazon API Gateway, Amazon Athena, Amazon CloudFront, Amazon DynamoDB, Amazon Elastic Compute Cloud - Compute, Amazon Elastic Container Service for Kubernetes, Amazon Elastic File System, Amazon Elastic Load Balancing, Amazon GuardDuty, Amazon Lightsail, Amazon Polly, Amazon QuickSight, Amazon Relational Database Service, Amazon Route 53, Amazon Simple Email Service, Amazon Simple Notification Service, Amazon Simple Queue Service, Amazon Simple Storage Service, Amazon Virtual Private Cloud, AmazonCloudWatch, EC2 - Other, Savings Plans for AWS Compute usage.
+  
+  The top contributors to the anomaly are:
+  * Amazon Elastic Compute Cloud - Compute: +333.87
+  * Amazon Relational Database Service: +280.79
+  * Savings Plans for AWS Compute usage: +86.8
+  * Amazon Simple Storage Service: +70.7
+  * Amazon Virtual Private Cloud: +36.25
+  * EC2 - Other: +29.12
+  * AmazonCloudWatch: +25.71
+  * Amazon Elastic Load Balancing: +18.34
+  * Amazon Elastic Container Service for Kubernetes: +16.8
+  * Amazon API Gateway: +14.3
+
+==============================================================================
+FINAL STATE SUMMARY
+==============================================================================
+  data_mode                 : Normal
+  available_days            : 91
+  account_total_cost        : 955.46
+  account_anomaly_detected  : True
+  new_services_detected     : 35
+  contributors              : 26
+  alert_dispatched (dry-run): True

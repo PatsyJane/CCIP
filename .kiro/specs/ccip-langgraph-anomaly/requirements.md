@@ -32,9 +32,17 @@ at load time using a `${VAR_NAME}` syntax wrapper.
 | Gemini-generated email narrative + SMTP dispatch | **In scope** |
 | `config.yaml` with `${VAR}` injection from `.env` | **In scope** |
 | Structured-error handling reusing `connector.errors` | **In scope** |
+| Bounded retry (exponential backoff + jitter) of transient Cost_API fetch failures | **In scope** |
+| Terminal failure-notification email to a separate ops recipient on any run error | **In scope** |
+| D-2 default Target_Date (evaluate two settled days back, bypassing CUR lag) | **In scope (increment 2)** |
+| Per-account partitioned Metadata_Store files (name + id in the filename) | **In scope (increment 2)** |
+| Persisted rolling 90-day history in the Metadata_Store (source of truth for counting + STL) | **In scope (increment 2)** |
+| Incremental trailing-window fetch; full 90-day pull reserved for cold start / gap / reconciliation | **In scope (increment 2)** |
+| Honoring upstream `Retry-After`; failure-alert dedup/throttling across runs | **Deferred (v2)** |
 | AWS only (POC); GCP / Azure | **Deferred** |
-| Automated remediation; multi-account batch scheduling | **Deferred** |
-| Database-backed metadata (beyond a single JSON file) | **Deferred** |
+| Automated remediation | **Deferred** |
+| Multi-account batch **scheduling / cron**, bounded-concurrency orchestration, and an account **registry** | **Deferred (explicitly out of increment 2)** |
+| Database-backed metadata (beyond per-account JSON files) | **Deferred** |
 
 ### Preserved from the existing codebase
 
@@ -57,11 +65,36 @@ at load time using a `${VAR_NAME}` syntax wrapper.
 - **Graph_State** — the shared, typed state object passed between nodes.
 - **Data_Mode** — the account's history-depth classification: `Cold Start`
   (< 30 complete days), `Initial` (30–59), `Beginner` (60–89), `Normal` (≥ 90).
-- **Target_Date** — the evaluation date, supplied manually for a run.
-- **Metadata_Store** — the single persistent JSON file holding
-  `known_active_services`, seasonal context, and last-anomaly records.
-- **New_Service** — a service observed on the Target_Date that is absent from the
-  Metadata_Store's known services.
+- **Target_Date** — the evaluation date for a run. An explicit value is always
+  honored; when omitted it defaults to **two days before today (D-2)** — see
+  Requirement 13. The two-day offset is deliberate: a given calendar day's AWS CUR
+  data is frequently still partial for hours into the following day (late-arriving
+  and retroactive line items), so evaluating D-2 trades one extra day of latency
+  for a materially more complete day of cost data.
+- **Metadata_Store** — the persistent JSON state for a single account, holding
+  `known_active_services`, seasonal context, last-anomaly records, non-anomaly
+  baseline days, AND (increment 2) the persisted Rolling_History_Window. As of
+  increment 2 the store is **partitioned per account** into its own file (see
+  Requirement 14), not one shared file.
+- **Per_Account_Metadata_Store** — the per-account Metadata_Store file. Its path is
+  `metadata/ccip_metadata_<sanitized_account_name>_<sanitized_account_id>.json`,
+  where both the account name and id are sanitized to a filename-safe charset
+  (Requirement 14).
+- **Rolling_History_Window** — the account's daily cost history persisted in the
+  Metadata_Store, maintained as a rolling window of at most `history_days`
+  (default 90) most-recent days. As of increment 2 it is the source of truth for
+  data-mode day-counting and STL, rather than re-deriving the full window from the
+  Cost_API on every run (Requirement 15).
+- **Trailing_Fetch_Window** — the small window (default 2 days: the Target_Date
+  and the day before it) fetched in steady state and merged into the
+  Rolling_History_Window, instead of re-pulling all 90 days (Requirement 16).
+- **Reconciliation_Fetch** — a periodic FULL `history_days`-window pull that
+  replaces the persisted Rolling_History_Window to self-heal any drift; also
+  triggered on a cold start or a detected history gap (Requirement 16).
+- **New_Service** — a service observed anywhere in the Rolling_History_Window
+  (post-merge) that is absent from the Metadata_Store's known services. The
+  synthetic `UNKNOWN` service bucket (the tagging sentinel for a missing/blank
+  service tag) is never treated as a New_Service.
 - **Account_Anomaly** — a detected spike in the account-level total cost.
 - **Anomaly_Contributor** — a service identified as driving an Account_Anomaly.
 - **Structured_Error** — the shared `{"error", "category", ...}` failure object.
@@ -179,9 +212,11 @@ history.
 1. WHEN `update_metadata_and_model` runs THEN the system SHALL load the
    Metadata_Store JSON (creating an empty store on first run) and expose it on
    `metadata`.
-2. WHEN today's ingested services are compared against the stored
-   `known_active_services` THEN the system SHALL append any service not previously
-   known to `new_services_detected`.
+2. WHEN the services observed across the fetched 90-day history window
+   (`service_history`) are compared against the stored `known_active_services`
+   THEN the system SHALL append any service not previously known to
+   `new_services_detected`, EXCLUDING the synthetic `UNKNOWN` bucket from both the
+   comparison and the persisted known set.
 3. WHEN new services are detected THEN the system SHALL immediately add them to the
    Metadata_Store so they are recognized in subsequent runs.
 4. IF `data_mode` is greater than `Cold Start` (i.e. `>= 30` complete days) THEN
@@ -330,3 +365,211 @@ workflow decided and did, so that I can trust and debug it.
 3. WHEN a run completes successfully THEN the system SHALL exit zero in the CLI.
 4. WHEN the workflow reports results THEN it SHALL report only what the nodes
    actually produced and SHALL fabricate nothing.
+
+### Requirement 12: Fetch resilience and failure notification
+
+**User Story:** As an operator running the workflow on a schedule, I want
+transient Cost_API failures retried automatically and I want to be emailed when a
+run cannot be completed, so that a brief upstream blip does not fail the run and a
+genuine failure never dies silently as a non-zero exit code no human sees.
+
+#### Acceptance Criteria
+
+1. WHEN the Phase 1 Cost_Tool fetch returns an `unreachable-source`
+   Structured_Error THEN the system SHALL retry the fetch using bounded
+   exponential backoff with jitter, up to a configured maximum number of
+   ATTEMPTS (default `3` total attempts), before giving up.
+2. WHEN a fetch failure's category is `invalid-parameter`, `missing-data`, or
+   `unexpected-error` THEN the system SHALL NOT retry, because those outcomes are
+   deterministic and a retry would fail identically; the error SHALL be returned
+   on the first occurrence.
+3. WHEN a retryable fetch is retried THEN the backoff delay between attempts SHALL
+   start at a configured base delay (default `1.0` second), grow by a configured
+   multiplier (default `2.0`), be capped at a configured maximum delay (default
+   `30.0` seconds), and have random jitter applied; each attempt SHALL still be
+   bounded by the shared 30s per-request `HttpClient` timeout (Req 11.4) — backoff
+   sleeps occur only BETWEEN attempts.
+4. WHEN a retry is attempted THEN the system SHALL emit a `WARNING` log naming the
+   attempt number, the remaining attempts, the error category, and the delay, so
+   the recovery sequence is reconstructable; secrets SHALL be scrubbed as for any
+   other log line.
+5. WHEN the retry budget is exhausted THEN the system SHALL return the LAST
+   observed Structured_Error (preserving its `unreachable-source` category and
+   source), and the number of attempts made SHALL be recorded on the error for the
+   failure alert.
+6. WHEN a run terminates with a Structured_Error on the Graph_State (from ANY
+   phase, retryable or not) THEN the graph SHALL route to a terminal
+   `dispatch_failure_alert` node rather than directly to `END`, so no error exit is
+   silent.
+7. WHEN `dispatch_failure_alert` runs THEN it SHALL build a DETERMINISTIC failure
+   alert payload (account id, target date, failing stage/source, error category,
+   scrubbed error message, attempts made) WITHOUT invoking the LLM, because the LLM
+   may itself be unavailable and the failure alert must not depend on it.
+8. WHEN the failure alert is delivered THEN it SHALL be sent via the same injected
+   Email_Sender used for anomaly alerts, addressed to a SEPARATE operations
+   recipient configured as `CCIP_ALERT_FAILURE_TO`; IF that recipient or SMTP is
+   not fully configured THEN the system SHALL perform a safe dry run (log the
+   rendered failure alert, send nothing) and complete without raising.
+9. WHEN the failure alert delivery itself fails or times out THEN the system SHALL
+   log the delivery failure and SHALL NOT retry the failure alert and SHALL NOT
+   loop back into failure handling (best-effort, non-recursive); the run result
+   SHALL remain the ORIGINAL Structured_Error.
+10. WHEN a run ends in a Structured_Error THEN the CLI SHALL still exit with a
+    non-zero status (Req 11.2) regardless of whether the failure alert was sent,
+    dry-run, or failed to send; failure notification is additive and never masks
+    the exit code.
+11. WHEN the failure alert payload is produced THEN every configured secret
+    substring SHALL be scrubbed from all of its fields before it leaves the
+    workflow (consistent with Req 10.4).
+
+#### Deferred to v2 (explicit non-goals this iteration)
+
+- Honoring an upstream `Retry-After` header (requires surfacing response headers
+  from the shared `HttpClient`, which currently discards the body/headers on a
+  non-2xx response).
+- Failure-alert deduplication / throttling across runs (requires new
+  last-failure-notified state in the Metadata_Store).
+
+---
+
+## Increment 2: Incremental ingestion and per-account metadata
+
+> This increment makes a single run cheaper and account-safe, so the workflow can
+> later scale to many accounts WITHOUT re-pulling 90 days of data per account per
+> day. It is deliberately scoped to the **core ingestion and metadata logic for a
+> single run**. The scheduler/cron, bounded-concurrency orchestration, and account
+> registry needed to actually drive many accounts are **explicitly deferred** (see
+> the Scope table) and have no requirements here.
+>
+> **Cost_API constraint that motivates this increment:** the Cost_API is primarily
+> limited by **date-range volume** (the breadth of the requested window), not by
+> raw request count. Shrinking the day span of the steady-state fetch is therefore
+> the dominant lever for staying within limits and keeping latency low, which is
+> why steady state relies on a small Trailing_Fetch_Window (Requirement 16).
+
+### Requirement 13: D-2 default Target_Date
+
+**User Story:** As an operator running the workflow daily, I want the default
+evaluation date to be two days back, so that I analyze a CUR day that has actually
+settled instead of a partial "yesterday".
+
+#### Acceptance Criteria
+
+1. WHEN a run is started WITHOUT an explicit Target_Date THEN the system SHALL
+   default the Target_Date to `today − 2` calendar days (D-2), computed from the
+   run host's current date.
+2. WHEN a run is started WITH an explicit Target_Date THEN the system SHALL honor
+   that value exactly and SHALL NOT apply the D-2 offset.
+3. WHEN the Target_Date is resolved THEN the single/trailing fetch window SHALL end
+   at that Target_Date (the window is `[Target_Date − fetched_days, Target_Date]`),
+   so a run on day D with the default evaluates D-2 and never requests a day after
+   D-2.
+4. WHEN the default offset is applied THEN the number of days SHALL be sourced from
+   configuration (a `target_date_offset_days` setting, default `2`) so the offset
+   is tunable without code changes, consistent with Requirement 1.
+
+### Requirement 14: Per-account partitioned Metadata_Store
+
+**User Story:** As an operator preparing to run many accounts, I want each
+account's metadata in its own human-readable file, so that accounts never corrupt
+each other's state and a file is easy to locate by eye.
+
+#### Acceptance Criteria
+
+1. WHEN the Metadata_Store is resolved for a run THEN the system SHALL use a
+   PER-ACCOUNT file path of the form
+   `metadata/ccip_metadata_<sanitized_account_name>_<sanitized_account_id>.json`,
+   under a configurable base directory (default `metadata/`).
+2. WHEN the account name and account id are incorporated into the filename THEN the
+   system SHALL sanitize each by replacing any character outside the safe set
+   `[A-Za-z0-9._-]` (including spaces and path separators) with an underscore,
+   collapsing runs of underscores, and trimming leading/trailing separators, so the
+   resulting name is safe on BOTH Windows and Linux filesystems and cannot cause
+   path traversal.
+3. IF the account name is blank THEN the system SHALL omit the name segment and
+   fall back to `ccip_metadata_<sanitized_account_id>.json` (the id segment is
+   always present), so a missing name never yields a malformed or ambiguous
+   filename.
+4. WHEN two different accounts run THEN each SHALL read and write ONLY its own
+   per-account file, so their `known_active_services`, `seasonal`,
+   `non_anomaly_days`, `last_anomaly`, and Rolling_History_Window are fully
+   isolated with no cross-account write collision.
+5. WHEN a per-account file is written THEN the write SHALL remain atomic
+   (write-to-temp then replace) per Requirement 5.8, and the base directory SHALL
+   be created if absent.
+6. WHEN a per-account file is absent on first run for that account THEN the system
+   SHALL create a fresh default store for that account (consistent with
+   Requirement 5.1), not read any other account's file.
+
+### Requirement 15: Persisted rolling 90-day history
+
+**User Story:** As an analyst, I want the account's daily history persisted and
+maintained in the Metadata_Store, so that a run does not have to re-fetch the
+entire 90-day window from the Cost_API to count days and run STL.
+
+#### Acceptance Criteria
+
+1. WHEN the Metadata_Store is loaded THEN it SHALL expose a persisted
+   Rolling_History_Window comprising the account-total daily series
+   (`history_series`) and the per-service daily series (`service_history`),
+   defaulting to empty on a fresh store.
+2. WHEN a run normalizes new daily data THEN the system SHALL merge it into the
+   persisted Rolling_History_Window and SHALL trim the result to at most
+   `history_days` (default 90) most-recent days, dropping older days.
+3. WHEN days are merged THEN the merge SHALL be idempotent per day: re-ingesting a
+   day that already exists SHALL OVERWRITE that day's totals rather than adding to
+   them, so a re-run or an overlapping trailing window never double-counts cost.
+4. WHEN the data mode and STL are computed THEN the system SHALL derive
+   `available_days` and run STL from the merged, persisted Rolling_History_Window
+   rather than solely from the current fetch, so day-counting and STL are unaffected
+   by whether this run fetched a trailing window or a full window.
+5. WHEN STL is eligible to run THEN it SHALL continue to run on EVERY such run over
+   the current Rolling_History_Window (STL is refreshed daily, not cached across
+   runs), consistent with Requirement 5.4.
+6. WHEN the persisted history is written THEN it SHALL be part of the same atomic
+   per-account store write (Requirements 5.8, 14.5).
+
+### Requirement 16: Incremental trailing-window fetch
+
+**User Story:** As an operator mindful of Cost_API date-range limits, I want steady
+-state runs to fetch only a small trailing window, so that daily cost stays low and
+latency stays small while correctness is preserved.
+
+#### Acceptance Criteria
+
+1. WHEN a run performs the Phase 1 fetch AND the persisted Rolling_History_Window
+   already holds a complete, current history THEN the system SHALL fetch only a
+   small Trailing_Fetch_Window ending at the Target_Date — by default the
+   Target_Date and the single day before it (a configurable `trailing_fetch_days`,
+   default `2`) — rather than the full `history_days` window.
+2. WHEN the persisted Rolling_History_Window is EMPTY or holds fewer than
+   `history_days` days (a cold start for this account) THEN the system SHALL perform
+   a FULL `history_days`-window pull instead of a trailing window.
+3. WHEN the persisted Rolling_History_Window's most recent day is OLDER than
+   `Target_Date − 1` (a gap/cache miss that a trailing window could not bridge) THEN
+   the system SHALL perform a FULL `history_days`-window pull to backfill the gap.
+4. WHEN a configurable reconciliation interval has elapsed since the last full pull
+   (a periodic Reconciliation_Fetch) THEN the system SHALL perform a FULL
+   `history_days`-window pull that REPLACES the persisted Rolling_History_Window, so
+   any drift between the persisted history and authoritative Cost_API data
+   self-heals over time.
+5. WHEN any fetch (trailing OR full) completes THEN the fetched days SHALL be merged
+   into the persisted Rolling_History_Window under the idempotent, trimmed rules of
+   Requirement 15, and the subsequent phases SHALL operate on the merged window.
+6. WHEN a fetch is a trailing window THEN it SHALL still use `DAILY` granularity and
+   the same Structured_Error handling as the full fetch (Requirements 3.3–3.5), and
+   SHALL still be wrapped by the bounded retry of Requirement 12 for
+   `unreachable-source` failures.
+7. WHEN the chosen fetch mode is decided THEN the decision (trailing vs full, and
+   the triggering reason: steady-state / cold-start / gap / reconciliation) SHALL be
+   recorded in the run's structured logs, so the fetch behavior is auditable
+   (consistent with Requirement 11).
+
+#### Deferred (explicitly out of increment 2)
+
+- The scheduler / cron that triggers a daily run.
+- Bounded-concurrency orchestration across many accounts.
+- The account registry (the list of accounts to iterate).
+
+These are intentionally excluded; this increment refactors only the core ingestion
+and metadata logic for a SINGLE run.

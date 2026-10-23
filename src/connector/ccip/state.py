@@ -37,6 +37,9 @@ class CcipState(TypedDict, total=False):
     data_mode: str
     available_days: int
     raw_payload: dict
+    # Increment 2: the per-account store loaded in Phase 1 and the decided fetch
+    # window, carried forward for Phases 2-3 to merge/persist (Req 15, 16).
+    fetch_plan: dict
     # Phase 2 — pure normalization of raw_payload (no network)
     account_total_cost: float
     service_costs: dict  # service -> cost on target_date
@@ -56,6 +59,9 @@ class CcipState(TypedDict, total=False):
     alert_dispatched: bool
     alert_dry_run: bool
     narrative_templated: bool
+    # Terminal failure dispatch (Req 12.6-12.9)
+    failure_alert_dispatched: bool
+    failure_alert_dry_run: bool
     # Error channel (Req 10) — a Structured_Error dict, or None.
     error: Optional[dict]
 
@@ -105,6 +111,7 @@ def build_initial_state(account_id: str, target_date: str) -> CcipState:
         data_mode="",
         available_days=0,
         raw_payload={},
+        fetch_plan={},
         account_total_cost=0.0,
         service_costs={},
         history_series=[],
@@ -119,5 +126,7 @@ def build_initial_state(account_id: str, target_date: str) -> CcipState:
         alert_dispatched=False,
         alert_dry_run=False,
         narrative_templated=False,
+        failure_alert_dispatched=False,
+        failure_alert_dry_run=False,
         error=error,
     )

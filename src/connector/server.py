@@ -29,12 +29,14 @@ FastMCP API used (fastmcp 2.14.x)
 
 from __future__ import annotations
 
+import logging
 import sys
 
 from fastmcp import FastMCP
 
 from .config import AppConfig, ConfigError, load_config
 from .http_client import HttpClient
+from .logging_config import configure_logging, get_logger, log_event
 from .tools.aws_cur_cost import make_aws_cur_cost
 
 __all__ = [
@@ -112,6 +114,28 @@ def build_server() -> FastMCP:
     # Req 1.5 / 12.* — fail fast on missing/blank required config before wiring.
     config = load_config()
 
+    # Install structured JSON logging at the configured level and register the
+    # AWS credentials for scrubbing so they can never appear in any log line
+    # (Req 12.6, 12.7). Done right after config load so the rest of startup logs
+    # in JSON.
+    creds = config.credentials
+    secrets = (
+        [creds.access_key_id, creds.secret_access_key] if creds is not None else []
+    )
+    configure_logging(config.log_level, secrets=secrets)
+    logger = get_logger(__name__)
+    log_event(
+        logger,
+        "connector.startup",
+        payload={
+            "server_name": SERVER_NAME,
+            "aws_account_id": config.aws_account_id,
+            "aws_account_name": config.aws_account_name,
+            "aws_region": config.aws_region,
+            "log_level": config.log_level,
+        },
+    )
+
     # Req 11.1 — single shared async HTTP client reused across invocations.
     http = HttpClient(timeout=30.0)
 
@@ -120,6 +144,8 @@ def build_server() -> FastMCP:
 
     # Req 1.2, 1.3, 1.6 — register the only tool (async, discoverable by name).
     register_aws_cur_cost_tool(mcp, config, http)
+
+    log_event(logger, "connector.tool_registered", payload={"tool": AWS_CUR_COST_TOOL_NAME})
 
     return mcp
 
@@ -139,14 +165,29 @@ def main() -> None:
     On each failure a message is written to ``stderr`` and the process exits with
     a non-successful status via :func:`sys.exit`.
     """
+    # Ensure the JSON logger exists even if config load aborts before
+    # build_server() installs it (so abort reasons are logged structured too).
+    # LOG_LEVEL is read from the environment here; build_server reconfigures it
+    # from the validated AppConfig once config loads cleanly.
+    configure_logging()
+    logger = get_logger(__name__)
+
     try:
         server = build_server()
     except ConfigError as exc:
         # Req 1.5 — abort startup naming the missing configuration value.
+        log_event(
+            logger, "connector.startup_aborted", level=logging.ERROR,
+            payload={"reason": "config-error", "detail": str(exc)},
+        )
         sys.stderr.write(f"startup aborted: {exc}\n")
         sys.exit(1)
     except ToolRegistrationError as exc:
         # Req 1.6 — abort startup, serve no tools, name the failing tool.
+        log_event(
+            logger, "connector.tool_registration_failed", level=logging.ERROR,
+            payload={"reason": "tool-registration-error", "detail": str(exc)},
+        )
         sys.stderr.write(f"tool registration failed: {exc}\n")
         sys.exit(1)
 
@@ -154,6 +195,10 @@ def main() -> None:
         # Req 1.4 — start the MCP server via the FastMCP run entry point.
         server.run()
     except Exception as exc:  # noqa: BLE001 — Req 1.7: non-zero exit on start failure
+        log_event(
+            logger, "connector.run_failed", level=logging.ERROR,
+            payload={"reason": "server-start-error", "detail": str(exc)},
+        )
         sys.stderr.write(f"server failed to start: {exc}\n")
         sys.exit(1)
 

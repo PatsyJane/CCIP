@@ -23,7 +23,15 @@ from .fakes import FakeCostTool, FakeEmailSender, FakeLLMClient, make_daily_payl
 def _config(tmp_path, **kw):
     base = dict(
         metadata_path=str(tmp_path / "md.json"),
+        # Increment 2: the store is partitioned per account under metadata_dir.
+        # Point it at tmp_path so each test is isolated and nothing is written to
+        # the real workspace (Req 14).
+        metadata_dir=str(tmp_path),
         _secrets=CcipSecrets(llm_api_key="k", smtp_password="p"),
+        # Zero-delay retry so the transient-fetch tests never actually sleep.
+        retry_base_delay=0.0,
+        retry_max_delay=0.0,
+        retry_jitter=False,
     )
     base.update(kw)
     return CcipConfig(**base)
@@ -126,7 +134,10 @@ async def test_no_anomaly_no_new_services_routes_to_end(tmp_path):
     payload = make_daily_payload(
         {"ec2": _noisy_series("2026-09-29", 120, weekly)}, end_day="2026-09-29"
     )
-    md_path = tmp_path / "md.json"
+    # Increment 2: seed the PER-ACCOUNT store (metadata_dir/ccip_metadata_<id>.json
+    # for account "A" with a blank account_name) so services are known and a prior
+    # non-anomaly day exists (Req 14).
+    md_path = tmp_path / "ccip_metadata_A.json"
     md_path.write_text(json.dumps({
         "known_active_services": ["ec2"],
         "seasonal": {}, "last_anomaly": None,

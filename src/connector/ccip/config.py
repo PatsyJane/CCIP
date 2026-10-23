@@ -78,15 +78,43 @@ class CcipConfig:
     stl_robust: bool = True
     # Ingestion (Req 3.1)
     history_days: int = 90
+    # Incremental ingestion + per-account metadata (increment 2, Req 13, 15, 16).
+    # ``target_date_offset_days`` is the D-2 default offset (a run on day D with no
+    # explicit Target_Date evaluates D-N); ``trailing_fetch_days`` is the small
+    # steady-state window merged into the persisted Rolling_History_Window;
+    # ``reconciliation_interval_days`` is the cadence of the periodic FULL pull
+    # that replaces the persisted history to self-heal drift.
+    target_date_offset_days: int = 2
+    trailing_fetch_days: int = 2
+    reconciliation_interval_days: int = 7
     # LLM + email (Req 9)
     llm_model: str = "gemini-2.5-flash-lite"
     email_from: str = "ccip-alerts@localhost"
     email_to: str = "ccip-alerts@localhost"
+    # Separate operations recipient for terminal failure-notification alerts
+    # (Req 12.8). Blank => the failure alert dry-runs (log only, no send).
+    email_failure_to: str = ""
     smtp_host: Optional[str] = None
     smtp_port: int = 587
     smtp_username: Optional[str] = None
-    # Storage (Req 5.1)
+    # Fetch retry: bounded exponential backoff with jitter applied ONLY to
+    # transient (unreachable-source) Phase-1 fetch failures (Req 12.1-12.3).
+    retry_max_attempts: int = 3
+    retry_base_delay: float = 1.0
+    retry_max_delay: float = 30.0
+    retry_multiplier: float = 2.0
+    retry_jitter: bool = True
+    # Storage (Req 5.1). ``metadata_path`` is the legacy single-file path retained
+    # for backward compatibility; increment 2 partitions the store per account
+    # under ``metadata_dir`` via ``metadata_store.account_metadata_path`` (Req 14).
     metadata_path: str = "ccip_metadata.json"
+    metadata_dir: str = "metadata"
+    # Observability: structured-logging level (defaults to INFO) and the human
+    # account name used to enrich contextual log payloads. ``account_name`` is
+    # sourced from the shared ``AWS_ACCOUNT_NAME`` env value so detection logs can
+    # carry it alongside ``account_id`` (the CcipState only tracks the id).
+    log_level: str = "INFO"
+    account_name: str = ""
     # Excluded from repr so secret values never leak (Req 1.5).
     _secrets: Optional[CcipSecrets] = field(default=None, repr=False)
 
@@ -230,6 +258,7 @@ def load_ccip_config(config_path: str = "config.yaml") -> CcipConfig:
     ingestion = data.get("ingestion") or {}
     llm = data.get("llm") or {}
     email = data.get("email") or {}
+    retry = data.get("retry") or {}
     storage = data.get("storage") or {}
 
     method = (_opt_str(detection.get("statistical_method")) or "iqr").lower()
@@ -255,12 +284,31 @@ def load_ccip_config(config_path: str = "config.yaml") -> CcipConfig:
         stl_seasonal=_as_int(stl.get("seasonal"), 7, "stl.seasonal"),
         stl_robust=_as_bool(stl.get("robust"), True),
         history_days=_as_int(ingestion.get("history_days"), 90, "ingestion.history_days"),
+        target_date_offset_days=_as_int(
+            ingestion.get("target_date_offset_days"), 2, "ingestion.target_date_offset_days"
+        ),
+        trailing_fetch_days=_as_int(
+            ingestion.get("trailing_fetch_days"), 2, "ingestion.trailing_fetch_days"
+        ),
+        reconciliation_interval_days=_as_int(
+            ingestion.get("reconciliation_interval_days"), 7,
+            "ingestion.reconciliation_interval_days",
+        ),
         llm_model=_opt_str(llm.get("model")) or "gemini-2.5-flash-lite",
         email_from=_opt_str(email.get("from")) or "ccip-alerts@localhost",
         email_to=_opt_str(email.get("to")) or "ccip-alerts@localhost",
+        email_failure_to=_opt_str(email.get("failure_to")) or "",
         smtp_host=_opt_str(email.get("smtp_host")),
         smtp_port=_as_int(email.get("smtp_port"), 587, "email.smtp_port"),
         smtp_username=_opt_str(email.get("smtp_username")),
+        retry_max_attempts=_as_int(retry.get("max_attempts"), 3, "retry.max_attempts"),
+        retry_base_delay=_as_float(retry.get("base_delay"), 1.0, "retry.base_delay"),
+        retry_max_delay=_as_float(retry.get("max_delay"), 30.0, "retry.max_delay"),
+        retry_multiplier=_as_float(retry.get("multiplier"), 2.0, "retry.multiplier"),
+        retry_jitter=_as_bool(retry.get("jitter"), True),
         metadata_path=_opt_str(storage.get("metadata_path")) or "ccip_metadata.json",
+        metadata_dir=_opt_str(storage.get("metadata_dir")) or "metadata",
+        log_level=_opt_str(os.environ.get("LOG_LEVEL")) or "INFO",
+        account_name=_opt_str(os.environ.get("AWS_ACCOUNT_NAME")) or "",
         _secrets=secrets,
     )

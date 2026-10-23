@@ -1,0 +1,113 @@
+﻿=== PHASE 2: services present on the target day (service_costs) ===
+count: 29
+ 1. AWS Backup  = $0.01
+ 2. AWS CloudTrail  = $5.66
+ 3. AWS Config  = $0.52
+ 4. AWS Cost Explorer  = $0.09
+ 5. AWS Direct Connect  = $1.7
+ 6. AWS Key Management Service  = $0.07
+ 7. AWS Lambda  = $6.74
+ 8. AWS Secrets Manager  = $0.12
+ 9. AWS Systems Manager  = $0.05
+10. Amazon API Gateway  = $14.3
+11. Amazon CloudFront  = $4.79
+12. Amazon DynamoDB  = $7.39
+13. Amazon EC2 Container Registry (ECR)  = $0.35
+14. Amazon ElastiCache  = $1.94
+15. Amazon Elastic Compute Cloud - Compute  = $333.87
+16. Amazon Elastic Container Service for Kubernetes  = $16.8
+17. Amazon Elastic File System  = $0.56
+18. Amazon Elastic Load Balancing  = $18.34
+19. Amazon Lightsail  = $0.0
+20. Amazon Polly  = $0.0
+21. Amazon Relational Database Service  = $280.79
+22. Amazon Route 53  = $12.75
+23. Amazon Simple Notification Service  = $0.0
+24. Amazon Simple Queue Service  = $0.04
+25. Amazon Simple Storage Service  = $70.7
+26. Amazon Virtual Private Cloud  = $36.25
+27. AmazonCloudWatch  = $25.71
+28. EC2 - Other  = $29.12
+29. Savings Plans for AWS Compute usage  = $86.8
+
+=== PHASE 3: window services / new_services_detected ===
+count: 35
+ 1. AWS Backup
+ 2. AWS CloudShell
+ 3. AWS CloudTrail
+ 4. AWS Config
+ 5. AWS Cost Explorer
+ 6. AWS Direct Connect
+ 7. AWS Key Management Service
+ 8. AWS Lambda
+ 9. AWS Secrets Manager
+10. AWS Systems Manager
+11. AWS X-Ray
+12. Amazon API Gateway
+13. Amazon Athena
+14. Amazon CloudFront
+15. Amazon DynamoDB
+16. Amazon EC2 Container Registry (ECR)
+17. Amazon ElastiCache
+18. Amazon Elastic Compute Cloud - Compute
+19. Amazon Elastic Container Service for Kubernetes
+20. Amazon Elastic File System
+21. Amazon Elastic Load Balancing
+22. Amazon GuardDuty
+23. Amazon Lightsail
+24. Amazon Polly
+25. Amazon QuickSight
+26. Amazon Relational Database Service
+27. Amazon Route 53
+28. Amazon Simple Email Service
+29. Amazon Simple Notification Service
+30. Amazon Simple Queue Service
+31. Amazon Simple Storage Service
+32. Amazon Virtual Private Cloud
+33. AmazonCloudWatch
+34. EC2 - Other
+35. Savings Plans for AWS Compute usage
+
+=== PHASE 5: contributors (service: +delta, baseline 0.0 -> current) ===
+count: 26
+ 1. Amazon Elastic Compute Cloud - Compute  +333.87  (0.0 -> 333.87)
+ 2. Amazon Relational Database Service  +280.79  (0.0 -> 280.79)
+ 3. Savings Plans for AWS Compute usage  +86.8  (0.0 -> 86.8)
+ 4. Amazon Simple Storage Service  +70.7  (0.0 -> 70.7)
+ 5. Amazon Virtual Private Cloud  +36.25  (0.0 -> 36.25)
+ 6. EC2 - Other  +29.12  (0.0 -> 29.12)
+ 7. AmazonCloudWatch  +25.71  (0.0 -> 25.71)
+ 8. Amazon Elastic Load Balancing  +18.34  (0.0 -> 18.34)
+ 9. Amazon Elastic Container Service for Kubernetes  +16.8  (0.0 -> 16.8)
+10. Amazon API Gateway  +14.3  (0.0 -> 14.3)
+11. Amazon Route 53  +12.75  (0.0 -> 12.75)
+12. Amazon DynamoDB  +7.39  (0.0 -> 7.39)
+13. AWS Lambda  +6.74  (0.0 -> 6.74)
+14. AWS CloudTrail  +5.66  (0.0 -> 5.66)
+15. Amazon CloudFront  +4.79  (0.0 -> 4.79)
+16. Amazon ElastiCache  +1.94  (0.0 -> 1.94)
+17. AWS Direct Connect  +1.7  (0.0 -> 1.7)
+18. Amazon Elastic File System  +0.56  (0.0 -> 0.56)
+19. AWS Config  +0.52  (0.0 -> 0.52)
+20. Amazon EC2 Container Registry (ECR)  +0.35  (0.0 -> 0.35)
+21. AWS Secrets Manager  +0.12  (0.0 -> 0.12)
+22. AWS Cost Explorer  +0.09  (0.0 -> 0.09)
+23. AWS Key Management Service  +0.07  (0.0 -> 0.07)
+24. AWS Systems Manager  +0.05  (0.0 -> 0.05)
+25. Amazon Simple Queue Service  +0.04  (0.0 -> 0.04)
+26. AWS Backup  +0.01  (0.0 -> 0.01)
+
+=== Window services with NO line item on the target day (35 - 29) ===
+count: 6
+ - AWS CloudShell
+ - AWS X-Ray
+ - Amazon Athena
+ - Amazon GuardDuty
+ - Amazon QuickSight
+ - Amazon Simple Email Service
+
+=== Target-day services with $0 cost (in Phase 2's 29 but not Phase 5's 26) ===
+count: 3
+ - Amazon Lightsail
+ - Amazon Polly
+ - Amazon Simple Notification Service
