@@ -91,12 +91,44 @@ def test_pre_increment2_store_upgrades_with_new_keys(tmp_path):
     assert loaded["known_active_services"] == ["ec2"]
     assert loaded["non_anomaly_days"] == {"2026-09-20": 20.0}
     # New increment-2 keys present with safe defaults.
-    assert loaded["history_series"] == []
+    assert loaded["account_history"] == []
     assert loaded["service_history"] == {}
     assert loaded["last_full_fetch_date"] is None
     # All default keys exist after load.
     for key in default_metadata():
         assert key in loaded
+
+
+def test_legacy_history_series_key_migrates_to_account_history(tmp_path):
+    # A store written before the rename used ``history_series`` for the
+    # Rolling_History_Window. load_metadata SHALL carry its value over to
+    # ``account_history`` and drop the legacy key (Req 15.1 back-compat).
+    hist = [{"day": "2026-09-28", "cost": 10.0}, {"day": "2026-09-29", "cost": 11.0}]
+    legacy = {
+        "known_active_services": ["ec2"],
+        "history_series": hist,
+    }
+    path = tmp_path / "legacy_history_series.json"
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    loaded = load_metadata(str(path))
+    # Value preserved under the new key; legacy key removed.
+    assert loaded["account_history"] == hist
+    assert "history_series" not in loaded
+
+
+def test_account_history_key_wins_over_legacy_when_both_present(tmp_path):
+    # If a store somehow carries BOTH keys, the new key is authoritative and the
+    # legacy key is discarded without clobbering it.
+    new_hist = [{"day": "2026-09-29", "cost": 99.0}]
+    old_hist = [{"day": "2026-09-29", "cost": 1.0}]
+    both = {"account_history": new_hist, "history_series": old_hist}
+    path = tmp_path / "both_keys.json"
+    path.write_text(json.dumps(both), encoding="utf-8")
+
+    loaded = load_metadata(str(path))
+    assert loaded["account_history"] == new_hist
+    assert "history_series" not in loaded
 
 
 # --- Merge helpers: concrete overwrite + trim (Req 15.2, 15.3) -------------
@@ -150,7 +182,7 @@ def _cfg(tmp_path, **kw):
 
 def test_decide_cold_start_when_history_empty(tmp_path):
     cfg = _cfg(tmp_path, history_days=90)
-    plan = decide_fetch_window({"history_series": []}, date(2026, 6, 1), cfg)
+    plan = decide_fetch_window({"account_history": []}, date(2026, 6, 1), cfg)
     assert plan.mode == "full" and plan.reason == "cold-start"
     assert plan.span_days == 90
     assert plan.end == "2026-06-01"
@@ -165,7 +197,7 @@ def test_decide_trailing_when_steady_state(tmp_path):
         for i in range(90)
     ]
     md = {
-        "history_series": hist,
+        "account_history": hist,
         "last_full_fetch_date": (target - timedelta(days=2)).isoformat(),
     }
     plan = decide_fetch_window(md, target, cfg)
@@ -182,7 +214,7 @@ def test_decide_reconciliation_replaces_history(tmp_path):
         for i in range(90)
     ]
     md = {
-        "history_series": hist,
+        "account_history": hist,
         "last_full_fetch_date": (target - timedelta(days=7)).isoformat(),  # due
     }
     plan = decide_fetch_window(md, target, cfg)
@@ -199,7 +231,7 @@ def test_decide_gap_triggers_full(tmp_path):
         {"day": (latest - timedelta(days=90 - 1 - i)).isoformat(), "cost": 10.0}
         for i in range(90)
     ]
-    plan = decide_fetch_window({"history_series": hist}, target, cfg)
+    plan = decide_fetch_window({"account_history": hist}, target, cfg)
     assert plan.mode == "full" and plan.reason == "gap"
 
 
@@ -229,7 +261,7 @@ async def test_cold_start_then_trailing_run_persists_and_reuses_history(tmp_path
     # The per-account store now holds the rolling history + last_full_fetch_date.
     store_path = account_metadata_path(cfg, "A", "")
     stored = json.loads(open(store_path, encoding="utf-8").read())
-    assert len(stored["history_series"]) == 90
+    assert len(stored["account_history"]) == 90
     assert stored["last_full_fetch_date"] == "2026-09-29"
 
     # Run 2: next day. Only a 2-day trailing payload is available from the tool.
@@ -247,8 +279,8 @@ async def test_cold_start_then_trailing_run_persists_and_reuses_history(tmp_path
 
     # The store history advanced to include the new day, trimmed to <= 90.
     stored2 = json.loads(open(store_path, encoding="utf-8").read())
-    assert len(stored2["history_series"]) <= 90
-    assert stored2["history_series"][-1]["day"] == "2026-09-30"
+    assert len(stored2["account_history"]) <= 90
+    assert stored2["account_history"][-1]["day"] == "2026-09-30"
 
 
 async def test_two_accounts_use_separate_files(tmp_path):

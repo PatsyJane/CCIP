@@ -119,7 +119,7 @@ async def trace(account_id: str, target_date: str, config_path: str) -> int:
 
         path = account_metadata_path(config, account_id, config.account_name)
         pre_md = load_metadata(path)
-        persisted = len(pre_md.get("history_series") or []) if isinstance(pre_md, dict) else 0
+        persisted = len(pre_md.get("account_history") or []) if isinstance(pre_md, dict) else 0
         plan = decide_fetch_window(pre_md if isinstance(pre_md, dict) else {},
                                    date.fromisoformat(target_date[:10]), config)
         print("  Fetch-window decision (from persisted store + config):")
@@ -149,8 +149,8 @@ async def trace(account_id: str, target_date: str, config_path: str) -> int:
         print("  Outputs:")
         _kv("    account_total_cost (target)", state["account_total_cost"])
         _kv("    service_costs (target day)", f"{len(state['service_costs'])} services")
-        _kv("    merged history_series", f"{len(state['history_series'])} days")
-        _kv("      series preview", _preview_series(state["history_series"]))
+        _kv("    merged account_history", f"{len(state['account_history'])} days")
+        _kv("      series preview", _preview_series(state["account_history"]))
         _kv("    merged service_history", f"{len(state['service_history'])} services")
         # Show the account total as the sum of per-service target costs.
         svc_sum = round(sum(state["service_costs"].values()), 2)
@@ -173,7 +173,7 @@ async def trace(account_id: str, target_date: str, config_path: str) -> int:
             more = "" if len(state["new_services_detected"]) <= 8 else f"  (+{len(state['new_services_detected']) - 8} more)"
             _kv("      sample", preview + more)
         print("  STL decomposition (fit on history EXCLUDING the target day):")
-        stl = run_stl(state["history_series"], config)
+        stl = run_stl(state["account_history"], config)
         if isinstance(stl, dict) and "error" in stl:
             _kv("    STL", f"not available: {stl['error']}")
             _kv("    -> Phase 4 fallback", "cold-start absolute comparison")

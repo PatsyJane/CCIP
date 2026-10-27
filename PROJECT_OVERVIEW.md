@@ -160,7 +160,7 @@ result** unchanged, so the CLI still exits non-zero.
    `unreachable-source` failures (see §4.6); deterministic errors are returned on
    the first occurrence.
 2. **`ingest_daily_data`** — PURE normalization of that payload (no network):
-   `account_total_cost`, `service_costs`, `history_series`, `service_history`.
+   `account_total_cost`, `service_costs`, `account_history`, `service_history`.
 3. **`update_metadata_and_model`** — loads the JSON Metadata_Store, detects and
    immediately persists new services, and (above Cold Start) runs STL and
    persists the seasonal summary. A **New_Service** is any service seen anywhere

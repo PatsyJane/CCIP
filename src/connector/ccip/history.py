@@ -20,14 +20,14 @@ __all__ = [
 ]
 
 
-def count_available_days(history_series: list[dict[str, Any]]) -> int:
+def count_available_days(account_history: list[dict[str, Any]]) -> int:
     """Count distinct calendar days present in the account history series (Req 3.1).
 
-    ``history_series`` is a list of ``{"day": "YYYY-MM-DD", "cost": float}`` rows.
+    ``account_history`` is a list of ``{"day": "YYYY-MM-DD", "cost": float}`` rows.
     Only rows with a usable ``day`` string contribute; duplicate days count once.
     """
     days: set[str] = set()
-    for row in history_series:
+    for row in account_history:
         if not isinstance(row, dict):
             continue
         day = row.get("day")

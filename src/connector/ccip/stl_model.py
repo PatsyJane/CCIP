@@ -91,15 +91,15 @@ def _percentile(ordered: list[float], pct: float) -> float:
     return ordered[low] + (ordered[high] - ordered[low]) * frac
 
 
-def run_stl(history_series: list[dict[str, Any]], config: Any) -> Union[StlResult, dict]:
+def run_stl(account_history: list[dict[str, Any]], config: Any) -> Union[StlResult, dict]:
     """Decompose the account total series and compute the residual threshold.
 
-    ``history_series`` is ascending ``[{"day", "cost"}, ...]``. Returns an
+    ``account_history`` is ascending ``[{"day", "cost"}, ...]``. Returns an
     :class:`StlResult` on success, or a Structured_Error when the series is too
     short for the configured STL period (so Phase 4 can fall back). Never raises.
     """
     try:
-        rows = [row for row in history_series if isinstance(row, dict)]
+        rows = [row for row in account_history if isinstance(row, dict)]
         all_values = [float(row.get("cost", 0.0)) for row in rows]
         all_days = [str(row.get("day", "")) for row in rows]
         period = int(getattr(config, "stl_period", 7))

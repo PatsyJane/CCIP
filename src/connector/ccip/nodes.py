@@ -224,7 +224,7 @@ async def determine_data_mode(state: dict[str, Any], deps: CcipDeps) -> dict[str
         else:
             persisted_days = {
                 str(row["day"])[:10]
-                for row in (metadata.get("history_series") or [])
+                for row in (metadata.get("account_history") or [])
                 if isinstance(row, dict) and row.get("day")
             }
             merged_days = persisted_days | fetched_days
@@ -273,7 +273,7 @@ async def ingest_daily_data(state: dict[str, Any], deps: CcipDeps) -> dict[str, 
 
     Normalization is pure (no network). The fetched window may be only a small
     trailing span (Req 16.1); increment 2 merges those days into the persisted
-    ``history_series`` / ``service_history`` (idempotent per-day overwrite, trimmed
+    ``account_history`` / ``service_history`` (idempotent per-day overwrite, trimmed
     to ``history_days``, Req 15.2-15.3) and exposes the MERGED series on the state.
     A reconciliation pull REPLACES rather than merges (Req 16.4). The Target_Date
     ``account_total_cost`` / ``service_costs`` always come from the fetch, since the
@@ -291,7 +291,7 @@ async def ingest_daily_data(state: dict[str, Any], deps: CcipDeps) -> dict[str, 
         replace = bool(plan.get("replace_history"))
         metadata = state.get("metadata") or {}
 
-        fetched_history = normalized["history_series"]
+        fetched_history = normalized["account_history"]
         fetched_service_history = normalized["service_history"]
 
         if replace:
@@ -302,7 +302,7 @@ async def ingest_daily_data(state: dict[str, Any], deps: CcipDeps) -> dict[str, 
             )
         else:
             merged_history = merge_history(
-                metadata.get("history_series") or [], fetched_history, history_days
+                metadata.get("account_history") or [], fetched_history, history_days
             )
             merged_service_history = merge_service_history(
                 metadata.get("service_history") or {}, fetched_service_history, history_days
@@ -311,7 +311,7 @@ async def ingest_daily_data(state: dict[str, Any], deps: CcipDeps) -> dict[str, 
         return {
             "account_total_cost": normalized["account_total_cost"],
             "service_costs": normalized["service_costs"],
-            "history_series": merged_history,
+            "account_history": merged_history,
             "service_history": merged_service_history,
         }
     except Exception as exc:  # noqa: BLE001 - node totality (Req 10.3).
@@ -329,7 +329,7 @@ async def update_metadata_and_model(state: dict[str, Any], deps: CcipDeps) -> di
 
     Increment 2: the store was already loaded in Phase 1 (carried on
     ``state['metadata']``); reuse it instead of a second read. The merged
-    ``history_series`` / ``service_history`` from Phase 2 are persisted here, and a
+    ``account_history`` / ``service_history`` from Phase 2 are persisted here, and a
     FULL pull stamps ``last_full_fetch_date`` so the reconciliation clock advances
     (Req 16.4). All writes go to the per-account path (Req 14).
     """
@@ -348,7 +348,7 @@ async def update_metadata_and_model(state: dict[str, Any], deps: CcipDeps) -> di
             metadata = dict(metadata)  # copy before mutating
 
         # Persist the merged Rolling_History_Window produced in Phase 2 (Req 15.6).
-        metadata["history_series"] = state.get("history_series") or []
+        metadata["account_history"] = state.get("account_history") or []
         metadata["service_history"] = state.get("service_history") or {}
         # Advance the reconciliation clock on any FULL pull (Req 16.4).
         plan = state.get("fetch_plan") or {}
@@ -379,7 +379,7 @@ async def update_metadata_and_model(state: dict[str, Any], deps: CcipDeps) -> di
         stl_summary: dict | None = None
         data_mode = state.get("data_mode")
         if data_mode and is_above_cold_start(DataMode(data_mode)):
-            stl_result = run_stl(state.get("history_series", []), deps.config)
+            stl_result = run_stl(state.get("account_history", []), deps.config)
             if isinstance(stl_result, dict) and "error" in stl_result:
                 # A too-short series is not fatal: Phase 4 falls back. Record no model.
                 stl_summary = None
@@ -407,7 +407,7 @@ async def update_metadata_and_model(state: dict[str, Any], deps: CcipDeps) -> di
                 "residual_threshold": (stl_summary or {}).get("residual_threshold"),
                 "fetch_mode": plan.get("mode"),
                 "fetch_reason": plan.get("reason"),
-                "persisted_history_days": len(metadata.get("history_series") or []),
+                "persisted_history_days": len(metadata.get("account_history") or []),
                 "metadata_path": path,
             },
         )
@@ -456,7 +456,7 @@ async def detect_account_anomaly(state: dict[str, Any], deps: CcipDeps) -> dict[
             expected_cost = prev[1] if prev else None
         else:
             # Normal/Initial/Beginner: statistical detection via STL.
-            stl_result = run_stl(state.get("history_series", []), deps.config)
+            stl_result = run_stl(state.get("account_history", []), deps.config)
             if isinstance(stl_result, dict) and "error" in stl_result:
                 # STL could not run (too-short series). Fall back to the cold-start
                 # absolute comparison so detection has a defined answer (Req 6.6).

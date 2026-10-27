@@ -438,11 +438,11 @@ def test_property_fetch_window_selection(persisted_days, gap, days_since_full, h
 
     # Build a contiguous persisted history whose LATEST day is target - gap.
     latest = target - timedelta(days=gap)
-    history_series = [
+    account_history = [
         {"day": (latest - timedelta(days=persisted_days - 1 - i)).isoformat(), "cost": 10.0}
         for i in range(persisted_days)
     ]
-    metadata = {"history_series": history_series}
+    metadata = {"account_history": account_history}
     if has_last_full:
         metadata["last_full_fetch_date"] = (target - timedelta(days=days_since_full)).isoformat()
 
@@ -451,7 +451,7 @@ def test_property_fetch_window_selection(persisted_days, gap, days_since_full, h
     # The window END is always the Target_Date (Req 13.3).
     assert plan.end == target.isoformat()
 
-    distinct = len({r["day"] for r in history_series})
+    distinct = len({r["day"] for r in account_history})
     is_cold = distinct < history_days
     is_gap = (not is_cold) and latest.isoformat() < (target - timedelta(days=1)).isoformat()
     if has_last_full:

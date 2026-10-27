@@ -43,7 +43,7 @@ class CcipState(TypedDict, total=False):
     # Phase 2 — pure normalization of raw_payload (no network)
     account_total_cost: float
     service_costs: dict  # service -> cost on target_date
-    history_series: list  # [{"day": "YYYY-MM-DD", "cost": float}, ...] ascending
+    account_history: list  # [{"day": "YYYY-MM-DD", "cost": float}, ...] ascending
     service_history: dict  # service -> [{"day", "cost"}, ...]
     # Phase 3
     metadata: dict
@@ -114,7 +114,7 @@ def build_initial_state(account_id: str, target_date: str) -> CcipState:
         fetch_plan={},
         account_total_cost=0.0,
         service_costs={},
-        history_series=[],
+        account_history=[],
         service_history={},
         metadata={},
         new_services_detected=[],

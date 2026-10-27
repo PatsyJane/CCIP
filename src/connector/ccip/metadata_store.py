@@ -7,7 +7,7 @@ A per-account JSON file tracks, across runs:
 - ``last_anomaly`` — the last recorded anomaly ``{date, contributors, context}``;
 - ``non_anomaly_days`` — account days considered non-anomalous
   (``{day: total}``), used as the Cold_Start / drill-down baseline;
-- ``history_series`` — the persisted Rolling_History_Window of account totals
+- ``account_history`` — the persisted Rolling_History_Window of account totals
   (``[{day, cost}]`` ascending), the source of truth for data-mode counting and
   STL (increment 2, Req 15.1);
 - ``service_history`` — the per-service daily series (``{service: [{day, cost}]}``)
@@ -58,7 +58,7 @@ DEFAULT_METADATA: dict[str, Any] = {
     "last_anomaly": None,
     "non_anomaly_days": {},
     # --- increment 2: persisted Rolling_History_Window (Req 15.1) ---
-    "history_series": [],
+    "account_history": [],
     "service_history": {},
     "last_full_fetch_date": None,
 }
@@ -190,6 +190,14 @@ def load_metadata(path: str) -> Union[dict[str, Any], dict]:
             source="metadata-store",
             path=path,
         )
+    # Back-compat: the Rolling_History_Window key was renamed
+    # ``history_series`` -> ``account_history``. Migrate a store written by an
+    # older build so its persisted history is preserved rather than silently
+    # re-seeded empty. Only migrate when the new key is absent, so a store that
+    # already uses the new key is never clobbered (Req 15.1).
+    if "history_series" in data and "account_history" not in data:
+        data["account_history"] = data["history_series"]
+    data.pop("history_series", None)
     merged = default_metadata()
     merged.update(data)
     return merged

@@ -51,9 +51,9 @@ def test_normalize_payload_sums_and_groups():
     out = normalize_payload(payload, "2026-09-29")
     assert out["account_total_cost"] == 33.0  # 30 + 3 on the target day
     assert out["service_costs"] == {"ec2": 30.0, "s3": 3.0}
-    # history_series account total per day ascending
-    assert out["history_series"][0] == {"day": "2026-09-27", "cost": 11.0}
-    assert out["history_series"][-1] == {"day": "2026-09-29", "cost": 33.0}
+    # account_history account total per day ascending
+    assert out["account_history"][0] == {"day": "2026-09-27", "cost": 11.0}
+    assert out["account_history"][-1] == {"day": "2026-09-29", "cost": 33.0}
     assert len(out["service_history"]["ec2"]) == 3
 
 

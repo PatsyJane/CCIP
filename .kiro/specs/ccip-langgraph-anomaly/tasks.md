@@ -136,7 +136,7 @@ dotenv/repr-redaction config style, and the SMTP dry-run sender pattern.
       non-DAILY -> `invalid-parameter`; zero items -> `missing-data`; return the raw
       `{granularity, items}` payload for Phase 1 to store on state
     - `normalize_payload`: PURE, no network; read the raw payload and standardize into
-      `account_total_cost`, `service_costs`, `history_series`, `service_history`;
+      `account_total_cost`, `service_costs`, `account_history`, `service_history`;
       absent/malformed payload -> `unexpected-error`
     - _Requirements: 3.1, 3.3, 3.4, 3.5, 4.1, 4.2, 4.3_
 
@@ -321,7 +321,7 @@ dotenv/repr-redaction config style, and the SMTP dry-run sender pattern.
     - _Requirements: 14.1, 14.2, 14.3, 14.5_
 
   - [ ] 19.4 Persist the Rolling_History_Window in the store
-    - Expand `DEFAULT_METADATA` with `history_series`, `service_history`,
+    - Expand `DEFAULT_METADATA` with `account_history`, `service_history`,
       `last_full_fetch_date`; `load_metadata` merges over defaults so a
       pre-increment-2 file still exposes the keys
     - Implement `merge_history` / `merge_service_history`: day-keyed OVERWRITE

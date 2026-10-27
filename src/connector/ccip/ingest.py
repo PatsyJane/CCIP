@@ -72,11 +72,11 @@ class FetchPlan:
     replace_history: bool
 
 
-def _latest_history_day(history_series: list[dict[str, Any]]) -> Optional[str]:
+def _latest_history_day(account_history: list[dict[str, Any]]) -> Optional[str]:
     """Return the most recent ``YYYY-MM-DD`` in a persisted history series, or None."""
     days = [
         str(row["day"])[:10]
-        for row in (history_series or [])
+        for row in (account_history or [])
         if isinstance(row, dict) and row.get("day")
     ]
     return max(days) if days else None
@@ -106,13 +106,13 @@ def decide_fetch_window(
     trailing_days = max(1, int(getattr(config, "trailing_fetch_days", 2)))
     reconcile_interval = int(getattr(config, "reconciliation_interval_days", 7))
 
-    history_series = metadata.get("history_series") or []
+    account_history = metadata.get("account_history") or []
     distinct_days = {
         str(row["day"])[:10]
-        for row in history_series
+        for row in account_history
         if isinstance(row, dict) and row.get("day")
     }
-    latest_day = _latest_history_day(history_series)
+    latest_day = _latest_history_day(account_history)
 
     def _full(reason: str, replace: bool = False) -> FetchPlan:
         start = (target_date - timedelta(days=history_days)).isoformat()
@@ -308,7 +308,7 @@ def normalize_payload(
     - ``account_total_cost`` — sum of per-service costs on the Target_Date
       (``0.00`` when the Target_Date has no items, imputed);
     - ``service_costs`` — ``{service: cost}`` for the Target_Date;
-    - ``history_series`` — ``[{"day", "cost"}]`` of the account total per day,
+    - ``account_history`` — ``[{"day", "cost"}]`` of the account total per day,
       ascending;
     - ``service_history`` — ``{service: [{"day", "cost"}]}`` ascending.
 
@@ -349,7 +349,7 @@ def normalize_payload(
             if day == target:
                 service_costs[service] = round(service_costs.get(service, 0.0) + cost, 2)
 
-        history_series = [
+        account_history = [
             {"day": day, "cost": round(total, 2)}
             for day, total in sorted(account_day.items())
         ]
@@ -365,7 +365,7 @@ def normalize_payload(
         return {
             "account_total_cost": account_total_cost,
             "service_costs": service_costs,
-            "history_series": history_series,
+            "account_history": account_history,
             "service_history": service_history,
         }
     except Exception:  # noqa: BLE001 - stage totality: never raise.

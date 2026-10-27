@@ -169,7 +169,7 @@ class CcipState(TypedDict, total=False):
     # Phase 2 (pure normalization of raw_payload — no network)
     account_total_cost: float
     service_costs: dict[str, float]  # service -> Target_Date cost
-    history_series: list[dict]       # [{"day": "YYYY-MM-DD", "cost": float}, ...]
+    account_history: list[dict]      # [{"day": "YYYY-MM-DD", "cost": float}, ...]
                                      # (increment 2) the MERGED persisted+fetched window
     service_history: dict[str, list[dict]]  # per-service daily series
                                      # (increment 2) likewise merged from the store
@@ -289,7 +289,7 @@ DEFAULT_METADATA = {
     "last_anomaly": None,             # {"date", "contributors", "context"} or None
     "non_anomaly_days": {},           # {day: total} account days considered non-anomalous
     # --- increment 2: persisted Rolling_History_Window (Req 15.1) ---
-    "history_series": [],             # [{"day": "YYYY-MM-DD", "cost": float}] account total/day, asc
+    "account_history": [],            # [{"day": "YYYY-MM-DD", "cost": float}] account total/day, asc
     "service_history": {},            # {service: [{"day", "cost"}]} per-service daily series, asc
     "last_full_fetch_date": None,     # "YYYY-MM-DD" of the last FULL pull (reconciliation clock, Req 16.4)
 }
@@ -369,7 +369,7 @@ def merge_service_history(persisted: dict, incoming: dict,
 ```
 
 `available_days` (Req 3.2) and `run_stl` (Req 5.4) both read the MERGED
-`history_series`, so day-counting and STL are independent of whether this run
+`account_history`, so day-counting and STL are independent of whether this run
 fetched a trailing or a full window (Req 15.4). STL still runs on every eligible
 run (Req 15.5).
 
@@ -406,7 +406,7 @@ def normalize_payload(raw_payload: dict, target_date: str) -> dict | <error>:
       {
         "account_total_cost": float,          # sum over services on target_date (0.00 if none)
         "service_costs": {service: cost},      # target_date per-service
-        "history_series": [{day, cost}],       # account total per day (asc)
+        "account_history": [{day, cost}],      # account total per day (asc)
         "service_history": {service: [{day, cost}]},
       }"""
 ```
@@ -457,7 +457,7 @@ normalized days into the persisted Rolling_History_Window via `merge_history` /
 later phase operates on the merged window.
 
 History depth (`available_days`, Req 3.2) is the count of distinct days in the
-MERGED `history_series` up to the Target_Date — NOT only the days present in this
+MERGED `account_history` up to the Target_Date — NOT only the days present in this
 run's (possibly trailing) raw payload (Req 15.4).
 
 #### Default Target_Date (increment 2) — Req 13
@@ -507,7 +507,7 @@ backoff is strictly between attempts.
 ### History + data mode (`history.py`) — Req 3
 
 ```python
-def count_available_days(history_series: list[dict]) -> int: ...
+def count_available_days(account_history: list[dict]) -> int: ...
 def classify_data_mode(available_days: int) -> DataMode: ...  # Req 3.2
 ```
 
@@ -523,7 +523,7 @@ class StlResult:
     target_residual: float      # residual at the Target_Date
     method: str
 
-def run_stl(history_series, config) -> StlResult | <error>:
+def run_stl(account_history, config) -> StlResult | <error>:
     """statsmodels.tsa.seasonal.STL on the account total series (asc by day).
     Requires enough points for the configured period; otherwise returns a
     missing-data/invalid-parameter error so Phase 4 can fall back. Computes the
@@ -604,8 +604,8 @@ Each node is an `async def node_x(state, deps) -> dict`. Behavior summary:
 | Node | Reads | Writes | Error cases |
 | --- | --- | --- | --- |
 | `determine_data_mode` | account_id, target_date, config, per-account metadata | raw_payload, available_days, data_mode | Cost_Tool error, non-DAILY, missing-data (Req 3.3–3.5) — the single MCP fetch; (increment 2) loads the per-account store to pick trailing vs full window via `decide_fetch_window` (Req 16) and counts days from the MERGED history (Req 15.4) |
-| `ingest_daily_data` | raw_payload, target_date | account_total_cost, service_costs, history_series, service_history | absent/malformed payload (Req 4.3) — pure, no network; (increment 2) merges the normalized days into the persisted Rolling_History_Window, idempotent + trimmed (Req 15.2, 15.3) |
-| `update_metadata_and_model` | service_history, history_series, data_mode, account_id/name | metadata, new_services_detected, stl_result | bad JSON store (Req 5.7), write failure (Req 10.5); (increment 2) reads/writes the PER-ACCOUNT file via `account_metadata_path`, persists the merged history + `last_full_fetch_date` (Req 14, 15.6) |
+| `ingest_daily_data` | raw_payload, target_date | account_total_cost, service_costs, account_history, service_history | absent/malformed payload (Req 4.3) — pure, no network; (increment 2) merges the normalized days into the persisted Rolling_History_Window, idempotent + trimmed (Req 15.2, 15.3) |
+| `update_metadata_and_model` | service_history, account_history, data_mode, account_id/name | metadata, new_services_detected, stl_result | bad JSON store (Req 5.7), write failure (Req 10.5); (increment 2) reads/writes the PER-ACCOUNT file via `account_metadata_path`, persists the merged history + `last_full_fetch_date` (Req 14, 15.6) |
 | `detect_account_anomaly` | data_mode, account_total_cost, stl_result, metadata | account_anomaly_detected, baseline_day | — |
 | `drill_down_services` | service_costs, service_history, baseline_day, metadata | anomaly_contributors | — |
 | `dispatch_alerts` | all | alert_payload, alert_dispatched, alert_dry_run, metadata(last_anomaly) | LLM fallback (Req 9.6), delivery failure (Req 9.5) |

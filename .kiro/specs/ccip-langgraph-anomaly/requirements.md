@@ -188,7 +188,7 @@ standardized structure — without a second network call.
    by Phase 1 from the Graph_State and SHALL NOT perform any additional MCP call.
 2. WHEN the raw payload is normalized THEN the system SHALL set
    `account_total_cost` (the Target_Date total, a float), `service_costs` (a
-   structure keyed by service name for the Target_Date), `history_series` (the
+   structure keyed by service name for the Target_Date), `account_history` (the
    account total per day, ascending), and `service_history` (per-service daily
    series).
 3. IF the raw payload is absent or malformed in the Graph_State THEN the node
@@ -511,7 +511,7 @@ entire 90-day window from the Cost_API to count days and run STL.
 
 1. WHEN the Metadata_Store is loaded THEN it SHALL expose a persisted
    Rolling_History_Window comprising the account-total daily series
-   (`history_series`) and the per-service daily series (`service_history`),
+   (`account_history`) and the per-service daily series (`service_history`),
    defaulting to empty on a fresh store.
 2. WHEN a run normalizes new daily data THEN the system SHALL merge it into the
    persisted Rolling_History_Window and SHALL trim the result to at most
